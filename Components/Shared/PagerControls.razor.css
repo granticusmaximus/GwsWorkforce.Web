@@ -1,4 +1,10 @@
 .pager-controls {
   display: flex;
   gap: 0.5rem;
+  padding: 0.2rem;
+    border-radius: 0.9rem;
+    background: rgba(255, 255, 255, 0.42);
+    border: 1px solid rgba(158, 184, 211, 0.48);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
 }

@@ -1,24 +1,26 @@
 .status-banner {
-  border-radius: 0.75rem;
-  padding: 0.7rem 0.85rem;
+  border-radius: 0.9rem;
+    padding: 0.72rem 0.9rem;
   border: 1px solid transparent;
   font-size: 0.92rem;
+  backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
 }
 
 .status-banner-info {
-  background: #eef5ff;
-  border-color: #bfd6f7;
-  color: #113b6b;
+  background: rgba(232, 243, 255, 0.68);
+    border-color: rgba(155, 190, 236, 0.74);
+    color: #104880;
 }
 
 .status-banner-success {
-  background: #edf9f1;
-  border-color: #bfe6cb;
-  color: #145432;
+  background: rgba(233, 249, 240, 0.72);
+    border-color: rgba(151, 209, 177, 0.74);
+    color: #0f6038;
 }
 
 .status-banner-error {
-  background: #fff1f1;
-  border-color: #f1c8c8;
-  color: #7a1f1f;
+  background: rgba(255, 242, 240, 0.72);
+    border-color: rgba(235, 169, 169, 0.78);
+    color: #872527;
 }

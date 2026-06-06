@@ -83,3 +83,12 @@ The CI workflow enforces:
 
 - Build artifacts and local DB files are ignored via `.gitignore`.
 - Only this root `README.md` is intended for public markdown documentation.
+
+## Delivery Status
+
+- Phase 2 (UX/UI Professionalization): Closed
+	- Visual shell and reusable components for Workforce and Knowledge pages are implemented.
+	- Accessibility checks cover ARIA labels and keyboard-reachable controls.
+	- Visual regression baselines are covered by UI signature tests for default and validation states.
+- Phase 3 (Backend Completion and Data Integrity): Started in test-first mode
+	- Initial data integrity tests are in place for deterministic paging and ordering behavior.

@@ -154,6 +154,130 @@ public class Phase2UiComponentTests : TestContext
         });
     }
 
+    [Fact]
+    public void Workforce_VisualBaseline_DefaultState_MatchesSignature()
+    {
+        Services.AddScoped<IWorkerCatalogService>(_ => new FakeWorkerCatalogService());
+        Services.AddScoped<IConversationService>(_ => new FakeConversationService(totalConversations: 11));
+        Services.AddScoped<IChatOrchestrationService>(_ => new FakeChatOrchestrationService());
+        Services.AddScoped<AuthenticationStateProvider>(_ => BuildAuthProvider("user-a"));
+
+        var cut = RenderComponent<CascadingAuthenticationState>(parameters =>
+            parameters.AddChildContent<Workforce>());
+
+        cut.WaitForAssertion(() =>
+        {
+            var signature = BuildWorkforceVisualSignature(cut);
+            const string expected = "title:AI Worker Console|panels:Worker,Conversations,Prompt|pager:Page 1 of 2 (11 conversations)|errorCount:0|errorText:none|assistantCount:0|messageCount:0";
+            Assert.Equal(expected, signature);
+        });
+    }
+
+    [Fact]
+    public void Workforce_VisualBaseline_ValidationState_MatchesSignature()
+    {
+        Services.AddScoped<IWorkerCatalogService>(_ => new FakeWorkerCatalogService());
+        Services.AddScoped<IConversationService>(_ => new FakeConversationService(totalConversations: 11));
+        Services.AddScoped<IChatOrchestrationService>(_ => new FakeChatOrchestrationService());
+        Services.AddScoped<AuthenticationStateProvider>(_ => BuildAuthProvider("user-a"));
+
+        var cut = RenderComponent<CascadingAuthenticationState>(parameters =>
+            parameters.AddChildContent<Workforce>());
+
+        cut.Find(".wf-send-row button").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            var signature = BuildWorkforceVisualSignature(cut);
+            const string expected = "title:AI Worker Console|panels:Worker,Conversations,Prompt|pager:Page 1 of 2 (11 conversations)|errorCount:1|errorText:Prompt is required.|assistantCount:0|messageCount:0";
+            Assert.Equal(expected, signature);
+        });
+    }
+
+    [Fact]
+    public void Knowledge_VisualBaseline_DefaultState_MatchesSignature()
+    {
+        Services.AddScoped<IKnowledgeService>(_ => new FakeKnowledgeService());
+        Services.AddScoped<AuthenticationStateProvider>(_ => BuildAuthProvider("user-a"));
+
+        var cut = RenderComponent<CascadingAuthenticationState>(parameters =>
+            parameters.AddChildContent<Knowledge>());
+
+        cut.WaitForAssertion(() =>
+        {
+            var signature = BuildKnowledgeVisualSignature(cut);
+            const string expected = "title:Knowledge Vault|panels:Add Knowledge Item,Your Knowledge Items|pager:Page 1 of 1 (0 total items)|errorCount:0|errorText:none|successCount:0|emptyCount:1";
+            Assert.Equal(expected, signature);
+        });
+    }
+
+    [Fact]
+    public void Knowledge_VisualBaseline_ValidationState_MatchesSignature()
+    {
+        Services.AddScoped<IKnowledgeService>(_ => new FakeKnowledgeService());
+        Services.AddScoped<AuthenticationStateProvider>(_ => BuildAuthProvider("user-a"));
+
+        var cut = RenderComponent<CascadingAuthenticationState>(parameters =>
+            parameters.AddChildContent<Knowledge>());
+
+        cut.Find(".kn-create-btn").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            var signature = BuildKnowledgeVisualSignature(cut);
+            const string expected = "title:Knowledge Vault|panels:Add Knowledge Item,Your Knowledge Items|pager:Page 1 of 1 (0 total items)|errorCount:1|errorText:Category, title, and content are required.|successCount:0|emptyCount:1";
+            Assert.Equal(expected, signature);
+        });
+    }
+
+    private static string BuildWorkforceVisualSignature(IRenderedFragment cut)
+    {
+        var title = cut.Find(".wf-header h1").TextContent.Trim();
+        var panels = string.Join(",", cut.FindAll(".wf-panel h2").Select(x => x.TextContent.Trim()));
+        var pager = cut.Find(".wf-meta").TextContent.Trim();
+        var errorCount = cut.FindAll(".status-banner-error").Count;
+        var errorText = errorCount > 0
+            ? cut.Find(".status-banner-error").TextContent.Trim()
+            : "none";
+        var assistantCount = cut.FindAll("section[aria-live='polite']").Count;
+        var messageCount = cut.FindAll(".wf-msg").Count;
+
+        return string.Join('|',
+        [
+            $"title:{title}",
+            $"panels:{panels}",
+            $"pager:{pager}",
+            $"errorCount:{errorCount}",
+            $"errorText:{errorText}",
+            $"assistantCount:{assistantCount}",
+            $"messageCount:{messageCount}"
+        ]);
+    }
+
+    private static string BuildKnowledgeVisualSignature(IRenderedFragment cut)
+    {
+        var title = cut.Find(".kn-header h1").TextContent.Trim();
+        var panels = string.Join(",", cut.FindAll(".kn-panel h2").Select(x => x.TextContent.Trim()));
+        var pager = cut.Find(".kn-meta").TextContent.Trim();
+        var errorCount = cut.FindAll(".status-banner-error").Count;
+        var errorText = errorCount > 0
+            ? cut.Find(".status-banner-error").TextContent.Trim()
+            : "none";
+        var successCount = cut.FindAll(".status-banner-success").Count;
+        var emptyCount = cut.FindAll(".kn-empty").Count;
+
+        return string.Join('|',
+        [
+            $"title:{title}",
+            $"panels:{panels}",
+            $"pager:{pager}",
+            $"errorCount:{errorCount}",
+            $"errorText:{errorText}",
+            $"successCount:{successCount}",
+            $"emptyCount:{emptyCount}"
+        ]);
+    }
+
     private static AuthenticationStateProvider BuildAuthProvider(string userId)
     {
         var identity = new ClaimsIdentity(

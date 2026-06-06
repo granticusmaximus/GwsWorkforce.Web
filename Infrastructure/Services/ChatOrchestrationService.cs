@@ -11,6 +11,15 @@ public sealed class ChatOrchestrationService(
     ApplicationDbContext dbContext,
     OllamaChatService ollamaChatService) : IChatOrchestrationService
 {
+    private const string ResponseQualityGovernanceInstruction =
+        "Response Governance Policy:\n" +
+        "1. Do not fabricate facts, citations, links, code behavior, or external events.\n" +
+        "2. If evidence is insufficient or uncertain, explicitly say what is unknown.\n" +
+        "3. Separate facts, assumptions, and recommendations in your response.\n" +
+        "4. Prefer concise, verifiable statements over speculation or filler wording.\n" +
+        "5. Include a confidence rating (High/Medium/Low) and a short verification checklist.\n" +
+        "6. If the request is ambiguous, ask clarifying questions before asserting conclusions.";
+
     public async Task<ChatSendResult> SendPromptAsync(
         string applicationUserId,
         int workerId,
@@ -56,7 +65,7 @@ public sealed class ChatOrchestrationService(
 
         var assistantResponse = await ollamaChatService.ChatAsync(
             worker.ModelName,
-            worker.SystemPrompt,
+            BuildGovernedSystemPrompt(worker.SystemPrompt),
             trimmedPrompt,
             history,
             cancellationToken);
@@ -121,5 +130,15 @@ public sealed class ChatOrchestrationService(
         }
 
         return $"{text[..80]}...";
+    }
+
+    private static string BuildGovernedSystemPrompt(string systemPrompt)
+    {
+        if (string.IsNullOrWhiteSpace(systemPrompt))
+        {
+            return ResponseQualityGovernanceInstruction;
+        }
+
+        return $"{systemPrompt.Trim()}\n\n{ResponseQualityGovernanceInstruction}";
     }
 }
