@@ -38,7 +38,7 @@ builder.Services.AddScoped<IWorkerCatalogService, WorkerCatalogService>();
 builder.Services.AddScoped<IConversationService, ConversationService>();
 builder.Services.AddScoped<IKnowledgeService, KnowledgeService>();
 builder.Services.AddScoped<IChatOrchestrationService, ChatOrchestrationService>();
-builder.Services.AddScoped<ProjectDraftStore>();
+builder.Services.AddSingleton<ProjectDraftStore>();
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
@@ -91,9 +91,7 @@ app.MapStaticAssets();
 
 // Compatibility redirects for removed starter-template pages.
 app.MapGet("/counter", () => Results.Redirect("/projects", permanent: false));
-app.MapGet("/Counter", () => Results.Redirect("/projects", permanent: false));
 app.MapGet("/weather", () => Results.Redirect("/projects", permanent: false));
-app.MapGet("/Weather", () => Results.Redirect("/projects", permanent: false));
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

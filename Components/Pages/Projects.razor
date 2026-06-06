@@ -219,13 +219,20 @@
             return;
         }
 
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
         isSubmitting = true;
 
         try
         {
             var projectKey = ProjectNaming.EncodeProjectKey(projectName);
-            ProjectDraftStore.SetDraft(projectKey, projectGoal.Trim());
-            NavigationManager.NavigateTo($"/projects/{projectKey}/live", forceLoad: true);
+            var draftId = ProjectDraftStore.SetDraft(userId, projectGoal.Trim());
+            NavigationManager.NavigateTo($"/projects/{projectKey}/live?draft={draftId}");
         }
         finally
         {
