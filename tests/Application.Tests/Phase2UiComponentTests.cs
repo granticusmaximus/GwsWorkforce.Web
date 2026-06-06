@@ -230,6 +230,28 @@ public class Phase2UiComponentTests : TestContext
         });
     }
 
+    [Fact]
+    public void Workforce_SendPrompt_ShowsVerificationReportPanel()
+    {
+        Services.AddScoped<IWorkerCatalogService>(_ => new FakeWorkerCatalogService());
+        Services.AddScoped<IConversationService>(_ => new FakeConversationService(totalConversations: 2));
+        Services.AddScoped<IChatOrchestrationService>(_ => new FakeChatOrchestrationService());
+        Services.AddScoped<AuthenticationStateProvider>(_ => BuildAuthProvider("user-a"));
+
+        var cut = RenderComponent<CascadingAuthenticationState>(parameters =>
+            parameters.AddChildContent<Workforce>());
+
+        cut.Find("#promptInput").Change("Summarize this.");
+        cut.Find(".wf-send-row button").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("Verification Report", cut.Markup);
+            Assert.Equal("PASS", cut.Find(".wf-verifier-pill").TextContent.Trim());
+            Assert.Contains("Verifier accepted response.", cut.Markup);
+        });
+    }
+
     private static string BuildWorkforceVisualSignature(IRenderedFragment cut)
     {
         var title = cut.Find(".wf-header h1").TextContent.Trim();
@@ -414,7 +436,13 @@ public class Phase2UiComponentTests : TestContext
     {
         public Task<ChatSendResult> SendPromptAsync(string applicationUserId, int workerId, string prompt, int? selectedConversationId, CancellationToken cancellationToken = default)
         {
-            var result = new ChatSendResult(1, "First Conversation", "Acknowledged");
+            var result = new ChatSendResult(
+                1,
+                "First Conversation",
+                "Acknowledged",
+                "PASS",
+                "Verifier accepted response.",
+                []);
             return Task.FromResult(result);
         }
     }

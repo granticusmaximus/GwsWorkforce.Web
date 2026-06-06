@@ -4,12 +4,15 @@ using GwsWorkforce.Web.Data;
 using GwsWorkforce.Web.Models.Workforce;
 using GwsWorkforce.Web.Services.Ollama;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using System.Text.Json;
 
 namespace GwsWorkforce.Web.Infrastructure.Services;
 
 public sealed class ChatOrchestrationService(
     ApplicationDbContext dbContext,
-    OllamaChatService ollamaChatService) : IChatOrchestrationService
+    OllamaChatService ollamaChatService,
+    IConfiguration configuration) : IChatOrchestrationService
 {
     private const string ResponseQualityGovernanceInstruction =
         "Response Governance Policy:\n" +
@@ -19,6 +22,11 @@ public sealed class ChatOrchestrationService(
         "4. Prefer concise, verifiable statements over speculation or filler wording.\n" +
         "5. Include a confidence rating (High/Medium/Low) and a short verification checklist.\n" +
         "6. If the request is ambiguous, ask clarifying questions before asserting conclusions.";
+
+    private const string VerifierSystemPrompt =
+        "You are a strict response verifier. Evaluate the candidate assistant response against the governance rubric. " +
+        "Return ONLY JSON with this schema: {\"decision\":\"PASS|FAIL\",\"summary\":\"short text\",\"issues\":[\"issue\"]}. " +
+        "Mark FAIL if any fabrication risk, unsupported claims, missing uncertainty signaling, excessive filler, or weak verification guidance exists.";
 
     public async Task<ChatSendResult> SendPromptAsync(
         string applicationUserId,
@@ -70,6 +78,17 @@ public sealed class ChatOrchestrationService(
             history,
             cancellationToken);
 
+        var verifierResult = await VerifyWithSecondStageModelAsync(
+            worker.ModelName,
+            trimmedPrompt,
+            assistantResponse,
+            cancellationToken);
+
+        if (!verifierResult.IsPass)
+        {
+            throw new InvalidOperationException($"Response blocked by verifier: {verifierResult.Summary}");
+        }
+
         dbContext.ConversationMessages.Add(new ConversationMessage
         {
             ConversationId = conversation.Id,
@@ -84,7 +103,10 @@ public sealed class ChatOrchestrationService(
         return new ChatSendResult(
             conversation.Id,
             conversation.Title,
-            assistantResponse);
+            assistantResponse,
+            verifierResult.Decision,
+            verifierResult.Summary,
+            verifierResult.Issues);
     }
 
     private async Task<Conversation> GetOrCreateConversationAsync(
@@ -141,4 +163,82 @@ public sealed class ChatOrchestrationService(
 
         return $"{systemPrompt.Trim()}\n\n{ResponseQualityGovernanceInstruction}";
     }
+
+    private async Task<VerifierDecision> VerifyWithSecondStageModelAsync(
+        string primaryModelName,
+        string userPrompt,
+        string assistantResponse,
+        CancellationToken cancellationToken)
+    {
+        var verifierModel = configuration["Ollama:VerifierModel"];
+        if (string.IsNullOrWhiteSpace(verifierModel))
+        {
+            throw new InvalidOperationException("Verifier model is not configured. Set Ollama:VerifierModel in appsettings.");
+        }
+
+        if (string.Equals(verifierModel, primaryModelName, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Verifier model must be different from the primary worker model.");
+        }
+
+        var verifierPrompt =
+            "User request:\n" + userPrompt + "\n\n" +
+            "Candidate assistant response:\n" + assistantResponse + "\n\n" +
+            "Evaluate against governance rubric and return JSON only.";
+
+        var verifierRaw = await ollamaChatService.ChatAsync(
+            verifierModel,
+            VerifierSystemPrompt,
+            verifierPrompt,
+            history: null,
+            cancellationToken);
+
+        return ParseVerifierDecision(verifierRaw);
+    }
+
+    private static VerifierDecision ParseVerifierDecision(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            var root = doc.RootElement;
+
+            var decision = root.TryGetProperty("decision", out var decisionProp)
+                ? decisionProp.GetString()
+                : null;
+
+            var summary = root.TryGetProperty("summary", out var summaryProp)
+                ? summaryProp.GetString()
+                : null;
+
+            var normalized = decision?.Trim().ToUpperInvariant();
+            if (normalized == "PASS")
+            {
+                return new VerifierDecision(true, "PASS", summary ?? "Verifier PASS.", []);
+            }
+
+            if (normalized == "FAIL")
+            {
+                var issues = root.TryGetProperty("issues", out var issuesProp) && issuesProp.ValueKind == JsonValueKind.Array
+                    ? issuesProp.EnumerateArray().Select(x => x.GetString()).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().ToList()
+                    : [];
+
+                var issueText = string.Join("; ", issues);
+
+                var merged = string.IsNullOrWhiteSpace(issueText)
+                    ? (summary ?? "Verifier returned FAIL.")
+                    : $"{summary ?? "Verifier returned FAIL."} Issues: {issueText}";
+
+                return new VerifierDecision(false, "FAIL", merged, issues);
+            }
+        }
+        catch (JsonException)
+        {
+            // If verifier does not return parseable JSON, treat as failure and block output.
+        }
+
+        return new VerifierDecision(false, "FAIL", "Verifier did not return valid PASS/FAIL JSON output.", []);
+    }
+
+    private sealed record VerifierDecision(bool IsPass, string Decision, string Summary, IReadOnlyList<string> Issues);
 }

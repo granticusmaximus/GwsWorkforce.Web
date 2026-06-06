@@ -6,6 +6,7 @@ using GwsWorkforce.Web.Infrastructure.Services;
 using GwsWorkforce.Web.Models.Workforce;
 using GwsWorkforce.Web.Services.Ollama;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace Application.Tests;
 
@@ -245,7 +246,13 @@ public class Phase3SecurityAndConsistencyTests
         };
 
         var ollamaService = new OllamaChatService(httpClient);
-        var orchestrationService = new ChatOrchestrationService(dbContext, ollamaService);
+        var orchestrationService = new ChatOrchestrationService(
+            dbContext,
+            ollamaService,
+            BuildConfiguration(new Dictionary<string, string?>
+            {
+                ["Ollama:VerifierModel"] = "verifier-model"
+            }));
 
         await Assert.ThrowsAsync<OllamaChatException>(() =>
             orchestrationService.SendPromptAsync("user-a", worker.Id, "Hello", selectedConversationId: null));
@@ -282,18 +289,35 @@ public class Phase3SecurityAndConsistencyTests
         dbContext.WorkerDefinitions.Add(worker);
         await dbContext.SaveChangesAsync();
 
-        string? capturedRequestJson = null;
+        var requestPayloads = new List<string>();
+        var callCount = 0;
 
         var successHandler = new StubHttpMessageHandler(async (request, cancellationToken) =>
         {
-            capturedRequestJson = request.Content is null
+            var payload = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
 
-            const string responseJson = "{\"message\":{\"role\":\"assistant\",\"content\":\"Verified response\"}}";
+            if (!string.IsNullOrWhiteSpace(payload))
+            {
+                requestPayloads.Add(payload);
+            }
+
+            callCount++;
+
+            if (callCount == 1)
+            {
+                const string primaryResponse = "{\"message\":{\"role\":\"assistant\",\"content\":\"Primary candidate answer\"}}";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(primaryResponse, Encoding.UTF8, "application/json")
+                };
+            }
+
+            const string verifierPass = "{\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"decision\\\":\\\"PASS\\\",\\\"summary\\\":\\\"Looks grounded\\\",\\\"issues\\\":[]}\"}}";
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
+                Content = new StringContent(verifierPass, Encoding.UTF8, "application/json")
             };
         });
 
@@ -303,24 +327,113 @@ public class Phase3SecurityAndConsistencyTests
         };
 
         var ollamaService = new OllamaChatService(httpClient);
-        var orchestrationService = new ChatOrchestrationService(dbContext, ollamaService);
+        var orchestrationService = new ChatOrchestrationService(
+            dbContext,
+            ollamaService,
+            BuildConfiguration(new Dictionary<string, string?>
+            {
+                ["Ollama:VerifierModel"] = "verifier-model"
+            }));
 
         var result = await orchestrationService.SendPromptAsync("user-a", worker.Id, "Check this", selectedConversationId: null);
 
-        Assert.Equal("Verified response", result.AssistantResponse);
-        Assert.False(string.IsNullOrWhiteSpace(capturedRequestJson));
+        Assert.Equal("Primary candidate answer", result.AssistantResponse);
+        Assert.Equal("PASS", result.VerifierDecision);
+        Assert.Contains("Looks grounded", result.VerifierSummary, StringComparison.Ordinal);
+        Assert.Empty(result.VerifierIssues);
 
-        using var json = JsonDocument.Parse(capturedRequestJson!);
-        var messages = json.RootElement.GetProperty("messages");
-        var first = messages[0];
-        var role = first.GetProperty("role").GetString();
-        var content = first.GetProperty("content").GetString();
+        Assert.Equal(2, requestPayloads.Count);
 
-        Assert.Equal("system", role);
-        Assert.NotNull(content);
-        Assert.Contains("Response Governance Policy", content, StringComparison.Ordinal);
-        Assert.Contains("Do not fabricate facts", content, StringComparison.Ordinal);
-        Assert.Contains("confidence rating", content, StringComparison.OrdinalIgnoreCase);
+        using (var firstCallJson = JsonDocument.Parse(requestPayloads[0]))
+        {
+            var firstMessages = firstCallJson.RootElement.GetProperty("messages");
+            var firstMessage = firstMessages[0];
+            var role = firstMessage.GetProperty("role").GetString();
+            var content = firstMessage.GetProperty("content").GetString();
+
+            Assert.Equal("system", role);
+            Assert.NotNull(content);
+            Assert.Contains("Response Governance Policy", content, StringComparison.Ordinal);
+            Assert.Contains("Do not fabricate facts", content, StringComparison.Ordinal);
+            Assert.Contains("confidence rating", content, StringComparison.OrdinalIgnoreCase);
+        }
+
+        using (var secondCallJson = JsonDocument.Parse(requestPayloads[1]))
+        {
+            var secondModel = secondCallJson.RootElement.GetProperty("model").GetString();
+            Assert.Equal("verifier-model", secondModel);
+        }
+
+    }
+
+    [Fact]
+    public async Task ChatFlow_VerifierRejects_BlocksAssistantMessagePersistence()
+    {
+        var dbName = $"chat-verifier-reject-{Guid.NewGuid()}";
+        await using var dbContext = CreateDbContext(dbName);
+
+        var worker = new WorkerDefinition
+        {
+            Key = "governed",
+            DisplayName = "Governed",
+            ModelName = "primary-model",
+            SystemPrompt = "You are a careful assistant.",
+            Temperature = 0.2,
+            IsEnabled = true,
+            CreatedAtUtc = DateTime.UtcNow
+        };
+
+        dbContext.WorkerDefinitions.Add(worker);
+        await dbContext.SaveChangesAsync();
+
+        var callCount = 0;
+        var handler = new StubHttpMessageHandler((_, _) =>
+        {
+            callCount++;
+            if (callCount == 1)
+            {
+                const string primaryResponse = "{\"message\":{\"role\":\"assistant\",\"content\":\"Primary candidate answer\"}}";
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(primaryResponse, Encoding.UTF8, "application/json")
+                });
+            }
+
+            const string verifierFail = "{\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"decision\\\":\\\"FAIL\\\",\\\"summary\\\":\\\"Unsupported claim\\\",\\\"issues\\\":[\\\"Missing uncertainty statement\\\"]}\"}}";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(verifierFail, Encoding.UTF8, "application/json")
+            });
+        });
+
+        var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("http://localhost:11434")
+        };
+
+        var ollamaService = new OllamaChatService(httpClient);
+        var orchestrationService = new ChatOrchestrationService(
+            dbContext,
+            ollamaService,
+            BuildConfiguration(new Dictionary<string, string?>
+            {
+                ["Ollama:VerifierModel"] = "verifier-model"
+            }));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            orchestrationService.SendPromptAsync("user-a", worker.Id, "Please answer", selectedConversationId: null));
+
+        Assert.Contains("blocked by verifier", ex.Message, StringComparison.OrdinalIgnoreCase);
+
+        var conversation = await dbContext.Conversations.SingleAsync(x => x.ApplicationUserId == "user-a");
+        var messages = await dbContext.ConversationMessages
+            .Where(x => x.ConversationId == conversation.Id)
+            .OrderBy(x => x.CreatedAtUtc)
+            .ToListAsync();
+
+        Assert.Single(messages);
+        Assert.Equal("user", messages[0].Role);
+        Assert.DoesNotContain(messages, x => x.Role == "assistant");
     }
 
     private static ApplicationDbContext CreateDbContext(string? dbName = null)
@@ -330,6 +443,13 @@ public class Phase3SecurityAndConsistencyTests
             .Options;
 
         return new ApplicationDbContext(options);
+    }
+
+    private static IConfiguration BuildConfiguration(IDictionary<string, string?> values)
+    {
+        return new ConfigurationBuilder()
+            .AddInMemoryCollection(values)
+            .Build();
     }
 
     private sealed class StubHttpMessageHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> responder) : HttpMessageHandler

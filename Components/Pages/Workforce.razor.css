@@ -133,6 +133,39 @@ background: rgba(248, 253, 255, 0.76);
   margin-bottom: 0.4rem;
 }
 
+.wf-verifier-panel {
+    border-color: rgba(94, 152, 210, 0.56);
+}
+
+.wf-verifier-meta {
+    margin: 0;
+    font-size: 0.84rem;
+    color: #345a84;
+}
+
+.wf-verifier-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.76rem;
+    letter-spacing: 0.05em;
+    font-weight: 680;
+    color: #0f4f90;
+    background: rgba(215, 234, 255, 0.75);
+    border: 1px solid rgba(137, 179, 220, 0.8);
+}
+
+.wf-verifier-summary {
+    margin: 0.65rem 0 0;
+    color: #183b63;
+}
+
+.wf-verifier-issues {
+    margin: 0.55rem 0 0;
+    padding-left: 1.1rem;
+    color: #274d76;
+}
 .wf-loading {
   margin-top: 1rem;
   padding: 1rem;
