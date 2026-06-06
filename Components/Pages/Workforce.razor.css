@@ -137,6 +137,53 @@ background: rgba(248, 253, 255, 0.76);
     border-color: rgba(94, 152, 210, 0.56);
 }
 
+.wf-verifier-panel.is-pass {
+    border-color: rgba(102, 191, 151, 0.84);
+    box-shadow: 0 14px 34px rgba(17, 102, 75, 0.16);
+}
+
+.wf-verifier-panel.is-fail {
+    border-color: rgba(227, 120, 137, 0.86);
+    box-shadow: 0 14px 34px rgba(138, 43, 64, 0.18);
+}
+
+.wf-verifier-panel.is-warn {
+    border-color: rgba(228, 178, 83, 0.84);
+    box-shadow: 0 14px 34px rgba(143, 99, 21, 0.16);
+}
+
+.wf-verifier-panel.is-unknown {
+    border-color: rgba(151, 173, 204, 0.82);
+    box-shadow: 0 14px 34px rgba(49, 80, 118, 0.14);
+}
+
+.wf-verifier-panel.is-pass h2,
+.wf-verifier-panel.is-pass .wf-verifier-meta,
+.wf-verifier-panel.is-pass .wf-verifier-summary,
+.wf-verifier-panel.is-pass .wf-verifier-issues {
+    color: #0f5a41;
+}
+
+.wf-verifier-panel.is-fail h2,
+.wf-verifier-panel.is-fail .wf-verifier-meta,
+.wf-verifier-panel.is-fail .wf-verifier-summary,
+.wf-verifier-panel.is-fail .wf-verifier-issues {
+    color: #7d1f2f;
+}
+
+.wf-verifier-panel.is-warn h2,
+.wf-verifier-panel.is-warn .wf-verifier-meta,
+.wf-verifier-panel.is-warn .wf-verifier-summary,
+.wf-verifier-panel.is-warn .wf-verifier-issues {
+    color: #6f4805;
+}
+
+.wf-verifier-panel.is-unknown h2,
+.wf-verifier-panel.is-unknown .wf-verifier-meta,
+.wf-verifier-panel.is-unknown .wf-verifier-summary,
+.wf-verifier-panel.is-unknown .wf-verifier-issues {
+    color: #2d4c72;
+}
 .wf-verifier-meta {
     margin: 0;
     font-size: 0.84rem;
@@ -146,6 +193,7 @@ background: rgba(248, 253, 255, 0.76);
 .wf-verifier-pill {
     display: inline-flex;
     align-items: center;
+gap: 0.33rem;
     border-radius: 999px;
     padding: 0.2rem 0.6rem;
     font-size: 0.76rem;
@@ -156,6 +204,43 @@ background: rgba(248, 253, 255, 0.76);
     border: 1px solid rgba(137, 179, 220, 0.8);
 }
 
+  .wf-verifier-icon {
+      width: 1.05rem;
+      height: 1.05rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      border: 1px solid currentColor;
+      font-size: 0.68rem;
+      font-weight: 800;
+      line-height: 1;
+      text-transform: uppercase;
+  }
+
+  .wf-verifier-pill.is-pass {
+      color: #0b5a3c;
+      background: rgba(211, 246, 229, 0.88);
+      border-color: rgba(102, 191, 151, 0.84);
+  }
+
+  .wf-verifier-pill.is-fail {
+      color: #8b1f2b;
+      background: rgba(255, 224, 229, 0.9);
+      border-color: rgba(227, 120, 137, 0.86);
+  }
+
+  .wf-verifier-pill.is-warn {
+      color: #7a4a00;
+      background: rgba(255, 239, 202, 0.9);
+      border-color: rgba(228, 178, 83, 0.82);
+  }
+
+  .wf-verifier-pill.is-unknown {
+      color: #334f71;
+      background: rgba(220, 230, 245, 0.86);
+      border-color: rgba(151, 173, 204, 0.82);
+  }
 .wf-verifier-summary {
     margin: 0.65rem 0 0;
     color: #183b63;

@@ -247,7 +247,12 @@ public class Phase2UiComponentTests : TestContext
         cut.WaitForAssertion(() =>
         {
             Assert.Contains("Verification Report", cut.Markup);
-            Assert.Equal("PASS", cut.Find(".wf-verifier-pill").TextContent.Trim());
+            var verifierPanel = cut.Find(".wf-verifier-panel");
+            Assert.Contains("is-pass", verifierPanel.ClassList);
+            var verifierPill = cut.Find(".wf-verifier-pill");
+            Assert.Contains("PASS", verifierPill.TextContent, StringComparison.Ordinal);
+            Assert.Contains("is-pass", verifierPill.ClassList);
+            Assert.Equal("+", cut.Find(".wf-verifier-icon").TextContent.Trim());
             Assert.Contains("Verifier accepted response.", cut.Markup);
         });
     }

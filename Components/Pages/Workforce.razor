@@ -100,10 +100,15 @@
 
                     @if (!string.IsNullOrWhiteSpace(lastVerifierDecision))
                     {
-                        <section class="wf-panel wf-verifier-panel" aria-live="polite">
+                        <section class="wf-panel wf-verifier-panel @GetVerifierPanelClass(lastVerifierDecision)" aria-live="polite">
                             <h2>Verification Report</h2>
                             <p class="wf-verifier-meta">
-                                Decision: <span class="wf-verifier-pill">@lastVerifierDecision</span>
+                                Decision:
+                                <span class="@GetVerifierPillClass(lastVerifierDecision)">
+                                    <span class="wf-verifier-icon"
+                                          aria-hidden="true">@GetVerifierDecisionIcon(lastVerifierDecision)</span>
+                                    @lastVerifierDecision
+                                </span>
                             </p>
                             <p class="wf-verifier-summary">@lastVerifierSummary</p>
 
@@ -140,6 +145,9 @@
 </div>
 
 @code {
+    [SupplyParameterFromQuery(Name = "conversationId")]
+    public int? ConversationIdFromQuery { get; set; }
+
     [CascadingParameter]
     private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
 
@@ -184,7 +192,25 @@
             selectedWorkerId = workers[0].Id;
         }
 
+        await ApplyConversationFromQueryAsync(userId);
+
         isLoading = false;
+    }
+
+    private async Task ApplyConversationFromQueryAsync(string userId)
+    {
+        if (!ConversationIdFromQuery.HasValue || ConversationIdFromQuery.Value <= 0)
+        {
+            return;
+        }
+
+        selectedConversationId = ConversationIdFromQuery.Value;
+        selectedConversationIdString = ConversationIdFromQuery.Value.ToString();
+
+        var selected = conversations.FirstOrDefault(x => x.Id == ConversationIdFromQuery.Value);
+        renameTitle = selected?.Title ?? string.Empty;
+
+        await LoadActiveConversationAsync(userId, ConversationIdFromQuery.Value);
     }
 
     private async Task HandleConversationChangedAsync(ChangeEventArgs args)
@@ -431,5 +457,44 @@
     {
         var authenticationState = AuthenticationStateTask is null ? null : await AuthenticationStateTask;
         return authenticationState?.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    }
+
+    private static string GetVerifierPillClass(string decision)
+    {
+        var normalized = decision.Trim().ToUpperInvariant();
+
+        return normalized switch
+        {
+            "PASS" => "wf-verifier-pill is-pass",
+            "FAIL" => "wf-verifier-pill is-fail",
+            "WARN" => "wf-verifier-pill is-warn",
+            _ => "wf-verifier-pill is-unknown"
+        };
+    }
+
+    private static string GetVerifierPanelClass(string decision)
+    {
+        var normalized = decision.Trim().ToUpperInvariant();
+
+        return normalized switch
+        {
+            "PASS" => "is-pass",
+            "FAIL" => "is-fail",
+            "WARN" => "is-warn",
+            _ => "is-unknown"
+        };
+    }
+
+    private static string GetVerifierDecisionIcon(string decision)
+    {
+        var normalized = decision.Trim().ToUpperInvariant();
+
+        return normalized switch
+        {
+            "PASS" => "+",
+            "FAIL" => "x",
+            "WARN" => "!",
+            _ => "?"
+        };
     }
 }

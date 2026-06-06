@@ -1,0 +1,280 @@
+@page "/projects"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using GwsWorkforce.Web.Application.Contracts
+@using GwsWorkforce.Web.Models.Workforce
+@using GwsWorkforce.Web.Services.Ollama
+@using Microsoft.AspNetCore.Authorization
+
+@inject IConversationService ConversationService
+@inject IWorkerCatalogService WorkerCatalogService
+@inject IChatOrchestrationService ChatOrchestrationService
+@inject NavigationManager NavigationManager
+
+<PageTitle>Projects</PageTitle>
+
+<div class="pj-page" aria-busy="@isLoading">
+    <header class="pj-header">
+        <p class="pj-eyebrow">GWS Workforce</p>
+        <h1>Projects</h1>
+        <p class="pj-subtitle">Organize work by project and jump straight into a dedicated conversation.</p>
+    </header>
+
+    @if (isLoading)
+    {
+        <div class="pj-loading">Loading projects...</div>
+    }
+    else
+    {
+        @if (!string.IsNullOrWhiteSpace(errorMessage))
+        {
+            <StatusBanner Message="@errorMessage" Variant="error" />
+        }
+
+        <section class="pj-panel pj-create">
+            <h2>Start Project Chat</h2>
+
+            <label class="pj-label" for="projectName">Project</label>
+            <input id="projectName" class="form-control" @bind="projectName" aria-label="Project name" />
+
+            <label class="pj-label" for="projectGoal">Goal</label>
+            <textarea id="projectGoal" class="form-control" rows="4" @bind="projectGoal" aria-label="Project goal"></textarea>
+
+            <label class="pj-label" for="projectWorker">Worker</label>
+            <select id="projectWorker" class="form-select" @bind="selectedWorkerId" aria-label="Project worker">
+                @foreach (var worker in workers)
+                {
+                    <option value="@worker.Id">@worker.DisplayName (@worker.ModelName)</option>
+                }
+            </select>
+
+            <button class="btn btn-primary pj-create-btn" @onclick="StartProjectAsync" disabled="@isSubmitting">
+                @(isSubmitting ? "Starting..." : "Start")
+            </button>
+        </section>
+
+        <section class="pj-panel pj-list">
+            <h2>Existing Projects</h2>
+
+            @if (projects.Count == 0)
+            {
+                <p class="pj-empty">No projects yet. Start one above.</p>
+            }
+            else
+            {
+                <div class="pj-items">
+                    @foreach (var project in projects)
+                    {
+                        <article class="pj-item">
+                            <header>
+                                <strong>@project.Name</strong>
+                                <span class="pj-count">@project.ConversationCount chats</span>
+                            </header>
+                            <p class="pj-meta">Last activity: @project.LastActivityUtc.ToLocalTime().ToString("g")</p>
+                            <button class="btn btn-outline-primary btn-sm" @onclick="() => OpenProjectChat(project.LatestConversationId)">Open</button>
+                        </article>
+                    }
+                </div>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    private readonly List<WorkerDefinition> workers = [];
+    private readonly List<ProjectSummary> projects = [];
+
+    private bool isLoading = true;
+    private bool isSubmitting;
+    private int selectedWorkerId;
+    private string projectName = string.Empty;
+    private string projectGoal = string.Empty;
+    private string errorMessage = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            isLoading = false;
+            return;
+        }
+
+        await LoadWorkersAsync();
+        await LoadProjectsAsync(userId);
+
+        if (workers.Count > 0)
+        {
+            selectedWorkerId = workers[0].Id;
+        }
+
+        isLoading = false;
+    }
+
+    private async Task LoadWorkersAsync()
+    {
+        workers.Clear();
+        workers.AddRange(await WorkerCatalogService.GetEnabledWorkersAsync());
+    }
+
+    private async Task LoadProjectsAsync(string userId)
+    {
+        projects.Clear();
+
+        var allConversations = await LoadAllConversationsAsync(userId);
+
+        var grouped = allConversations
+            .Select(x => new { Conversation = x, ProjectName = ExtractProjectName(x.Title) })
+            .Where(x => !string.IsNullOrWhiteSpace(x.ProjectName))
+            .GroupBy(x => x.ProjectName!, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var latest = group
+                    .Select(x => x.Conversation)
+                    .OrderByDescending(x => x.UpdatedAtUtc ?? x.CreatedAtUtc)
+                    .First();
+
+                return new ProjectSummary(
+                    group.Key,
+                    group.Count(),
+                    latest.UpdatedAtUtc ?? latest.CreatedAtUtc,
+                    latest.Id);
+            })
+            .OrderByDescending(x => x.LastActivityUtc);
+
+        projects.AddRange(grouped);
+    }
+
+    private async Task<IReadOnlyList<Conversation>> LoadAllConversationsAsync(string userId)
+    {
+        const int pageSize = 50;
+
+        var pageNumber = 1;
+        var all = new List<Conversation>();
+
+        while (true)
+        {
+            var page = await ConversationService.GetUserConversationsAsync(userId, pageNumber, pageSize);
+            all.AddRange(page.Items);
+
+            if (page.PageNumber >= page.TotalPages)
+            {
+                break;
+            }
+
+            pageNumber++;
+        }
+
+        return all;
+    }
+
+    private async Task StartProjectAsync()
+    {
+        errorMessage = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(projectName) || string.IsNullOrWhiteSpace(projectGoal))
+        {
+            errorMessage = "Project and goal are required.";
+            return;
+        }
+
+        if (workers.All(x => x.Id != selectedWorkerId))
+        {
+            errorMessage = "Select a worker.";
+            return;
+        }
+
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        isSubmitting = true;
+
+        try
+        {
+            var normalizedProjectName = projectName.Trim();
+            var kickoffPrompt = BuildProjectKickoffPrompt(normalizedProjectName, projectGoal.Trim());
+
+            var result = await ChatOrchestrationService.SendPromptAsync(
+                userId,
+                selectedWorkerId,
+                kickoffPrompt,
+                selectedConversationId: null);
+
+            await ConversationService.RenameConversationAsync(userId, result.ConversationId, $"Project: {normalizedProjectName}");
+
+            NavigationManager.NavigateTo($"/workforce?conversationId={result.ConversationId}");
+        }
+        catch (OllamaChatException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (InvalidOperationException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to start project: {ex.Message}";
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+
+    private void OpenProjectChat(int conversationId)
+    {
+        NavigationManager.NavigateTo($"/workforce?conversationId={conversationId}");
+    }
+
+    private static string BuildProjectKickoffPrompt(string project, string goal)
+    {
+        return $"Project: {project}\nGoal: {goal}\n\nCreate a practical first-step plan with clear next actions.";
+    }
+
+    private static string? ExtractProjectName(string title)
+    {
+        const string prefix = "Project:";
+
+        if (!title.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var raw = title[prefix.Length..].Trim();
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        var separatorIndex = raw.IndexOf('|');
+        if (separatorIndex >= 0)
+        {
+            raw = raw[..separatorIndex].Trim();
+        }
+
+        return string.IsNullOrWhiteSpace(raw) ? null : raw;
+    }
+
+    private async Task<string?> GetCurrentUserIdAsync()
+    {
+        var authenticationState = AuthenticationStateTask is null ? null : await AuthenticationStateTask;
+        return authenticationState?.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    }
+
+    private sealed record ProjectSummary(
+        string Name,
+        int ConversationCount,
+        DateTime LastActivityUtc,
+        int LatestConversationId);
+}
