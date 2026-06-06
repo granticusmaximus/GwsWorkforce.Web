@@ -14,7 +14,7 @@
 
 <PageTitle>GWS Workforce</PageTitle>
 
-<div class="wf-page">
+<div class="wf-page" aria-busy="@isLoading">
     <header class="wf-header">
         <p class="wf-eyebrow">GWS Workforce</p>
         <h1>AI Worker Console</h1>
@@ -32,7 +32,7 @@
                 <section class="wf-panel">
                     <h2>Worker</h2>
                     <label for="workerSelect" class="wf-label">Select worker</label>
-                    <select id="workerSelect" class="form-select" @bind="selectedWorkerId">
+                    <select id="workerSelect" class="form-select" @bind="selectedWorkerId" aria-label="Select worker">
                         @foreach (var worker in workers)
                         {
                             <option value="@worker.Id">@worker.DisplayName (@worker.ModelName)</option>
@@ -43,7 +43,7 @@
                 <section class="wf-panel">
                     <h2>Conversations</h2>
                     <label for="conversationSelect" class="wf-label">Your conversations</label>
-                    <select id="conversationSelect" class="form-select" value="@selectedConversationIdString" @onchange="HandleConversationChangedAsync">
+                    <select id="conversationSelect" class="form-select" value="@selectedConversationIdString" @onchange="HandleConversationChangedAsync" aria-label="Select conversation">
                         <option value="">Start new conversation</option>
                         @foreach (var conversation in conversations)
                         {
@@ -51,10 +51,12 @@
                         }
                     </select>
 
-                    <div class="wf-pager">
-                        <button class="btn btn-outline-secondary btn-sm" @onclick="PreviousConversationPageAsync" disabled="@(conversationPageNumber <= 1)">Previous</button>
-                        <button class="btn btn-outline-secondary btn-sm" @onclick="NextConversationPageAsync" disabled="@(conversationPageNumber >= conversationTotalPages)">Next</button>
-                    </div>
+                    <PagerControls
+                        CurrentPage="@conversationPageNumber"
+                        TotalPages="@conversationTotalPages"
+                        AriaLabel="Conversation list paging"
+                        OnPrevious="PreviousConversationPageAsync"
+                        OnNext="NextConversationPageAsync" />
                     <p class="wf-meta">Page @conversationPageNumber of @conversationTotalPages (@totalConversationCount conversations)</p>
                 </section>
 
@@ -75,7 +77,7 @@
             <main class="wf-main">
                 <section class="wf-panel wf-composer">
                     <h2>Prompt</h2>
-                    <textarea id="promptInput" class="form-control" rows="6" @bind="prompt" placeholder="Ask your selected worker..."></textarea>
+                    <textarea id="promptInput" class="form-control" rows="6" @bind="prompt" placeholder="Ask your selected worker..." aria-label="Prompt input"></textarea>
                     <div class="wf-send-row">
                         <button class="btn btn-primary" @onclick="SendPromptAsync" disabled="@isSubmitting">
                             @(isSubmitting ? "Sending..." : "Send")
@@ -85,12 +87,12 @@
 
                 @if (!string.IsNullOrWhiteSpace(errorMessage))
                 {
-                    <div class="alert alert-danger" role="alert">@errorMessage</div>
+                    <StatusBanner Message="@errorMessage" Variant="error" />
                 }
 
                 @if (!string.IsNullOrWhiteSpace(lastAssistantResponse))
                 {
-                    <section class="wf-panel">
+                    <section class="wf-panel" aria-live="polite">
                         <h2>Assistant Response</h2>
                         <pre class="wf-pre">@lastAssistantResponse</pre>
                     </section>

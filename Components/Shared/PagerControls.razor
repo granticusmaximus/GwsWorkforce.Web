@@ -1,0 +1,25 @@
+<nav class="pager-controls" aria-label="@AriaLabel">
+    <button class="btn btn-outline-secondary btn-sm" @onclick="OnPrevious" disabled="@DisablePrevious">Previous</button>
+    <button class="btn btn-outline-secondary btn-sm" @onclick="OnNext" disabled="@DisableNext">Next</button>
+</nav>
+
+@code {
+    [Parameter]
+    public int CurrentPage { get; set; }
+
+    [Parameter]
+    public int TotalPages { get; set; }
+
+    [Parameter]
+    public string AriaLabel { get; set; } = "Pagination";
+
+    [Parameter]
+    public EventCallback OnPrevious { get; set; }
+
+    [Parameter]
+    public EventCallback OnNext { get; set; }
+
+    private bool DisablePrevious => CurrentPage <= 1;
+
+    private bool DisableNext => CurrentPage >= TotalPages;
+}

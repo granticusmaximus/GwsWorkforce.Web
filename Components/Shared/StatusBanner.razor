@@ -1,0 +1,14 @@
+@if (!string.IsNullOrWhiteSpace(Message))
+{
+    <div class="status-banner status-banner-@Variant" role="status" aria-live="polite">
+        @Message
+    </div>
+}
+
+@code {
+    [Parameter]
+    public string Message { get; set; } = string.Empty;
+
+    [Parameter]
+    public string Variant { get; set; } = "info";
+}

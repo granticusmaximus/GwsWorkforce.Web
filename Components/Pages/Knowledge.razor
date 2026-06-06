@@ -11,7 +11,7 @@
 
 <PageTitle>Knowledge</PageTitle>
 
-<div class="kn-page">
+<div class="kn-page" aria-busy="@isLoading">
     <header class="kn-header">
         <p class="kn-eyebrow">GWS Workforce</p>
         <h1>Knowledge Vault</h1>
@@ -28,13 +28,14 @@
             <section class="kn-panel kn-create">
                 <h2>Add Knowledge Item</h2>
                 <label class="kn-label" for="knowledgeCategory">Category</label>
-                <input id="knowledgeCategory" class="form-control" @bind="newCategory" />
+                <input id="knowledgeCategory" class="form-control" @bind="newCategory" aria-label="Knowledge category" />
 
                 <label class="kn-label" for="knowledgeTitle">Title</label>
-                <input id="knowledgeTitle" class="form-control" @bind="newTitle" />
+                <input id="knowledgeTitle" class="form-control" @bind="newTitle" aria-label="Knowledge title" />
 
                 <label class="kn-label" for="knowledgeContent">Content</label>
-                <textarea id="knowledgeContent" class="form-control" rows="6" @bind="newContent"></textarea>
+                <textarea id="knowledgeContent" class="form-control" rows="6" @bind="newContent"
+                          aria-label="Knowledge content"></textarea>
 
                 <button class="btn btn-primary kn-create-btn" @onclick="AddKnowledgeItemAsync" disabled="@isSaving">Add
                     Item</button>
@@ -43,24 +44,20 @@
                 <section class="kn-panel kn-list">
                     <div class="kn-list-head">
                         <h2>Your Knowledge Items</h2>
-                        <div class="kn-pager">
-                            <button class="btn btn-outline-secondary btn-sm" @onclick="PreviousPageAsync"
-                                    disabled="@(pageNumber <= 1)">Previous</button>
-                            <button class="btn btn-outline-secondary btn-sm" @onclick="NextPageAsync"
-                                    disabled="@(pageNumber >= totalPages)">Next</button>
-                        </div>
+                        <PagerControls CurrentPage="@pageNumber" TotalPages="@totalPages" AriaLabel="Knowledge list paging"
+                                       OnPrevious="PreviousPageAsync" OnNext="NextPageAsync" />
                     </div>
 
                     <p class="kn-meta">Page @pageNumber of @totalPages (@totalItems total items)</p>
 
                     @if (!string.IsNullOrWhiteSpace(statusMessage))
                     {
-                        <div class="alert alert-success" role="alert">@statusMessage</div>
+                        <StatusBanner Message="@statusMessage" Variant="success" />
                     }
 
                     @if (!string.IsNullOrWhiteSpace(errorMessage))
                     {
-                        <div class="alert alert-danger" role="alert">@errorMessage</div>
+                        <StatusBanner Message="@errorMessage" Variant="error" />
                     }
 
                     @if (items.Count == 0)

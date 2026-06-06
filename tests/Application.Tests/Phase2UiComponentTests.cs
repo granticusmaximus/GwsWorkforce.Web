@@ -1,0 +1,237 @@
+using System.Security.Claims;
+using Bunit;
+using GwsWorkforce.Web.Application.Contracts;
+using GwsWorkforce.Web.Application.Models;
+using GwsWorkforce.Web.Components.Pages;
+using GwsWorkforce.Web.Models.Workforce;
+using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace Application.Tests;
+
+public class Phase2UiComponentTests : TestContext
+{
+    [Fact]
+    public void Workforce_RendersConversationPagingMetadata()
+    {
+        Services.AddScoped<IWorkerCatalogService>(_ => new FakeWorkerCatalogService());
+        Services.AddScoped<IConversationService>(_ => new FakeConversationService(totalConversations: 11));
+        Services.AddScoped<IChatOrchestrationService>(_ => new FakeChatOrchestrationService());
+        Services.AddScoped<AuthenticationStateProvider>(_ => BuildAuthProvider("user-a"));
+
+        var cut = RenderComponent<CascadingAuthenticationState>(parameters =>
+            parameters.AddChildContent<Workforce>());
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Page 1 of 2 (11 conversations)", cut.Markup));
+    }
+
+    [Fact]
+    public void Workforce_SelectingConversation_ShowsManageControls()
+    {
+        Services.AddScoped<IWorkerCatalogService>(_ => new FakeWorkerCatalogService());
+        Services.AddScoped<IConversationService>(_ => new FakeConversationService(totalConversations: 2));
+        Services.AddScoped<IChatOrchestrationService>(_ => new FakeChatOrchestrationService());
+        Services.AddScoped<AuthenticationStateProvider>(_ => BuildAuthProvider("user-a"));
+
+        var cut = RenderComponent<CascadingAuthenticationState>(parameters =>
+            parameters.AddChildContent<Workforce>());
+
+        var conversationSelect = cut.Find("#conversationSelect");
+        conversationSelect.Change("1");
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(cut.Find("#renameTitle"));
+            Assert.Contains("Delete", cut.Markup);
+        });
+    }
+
+    [Fact]
+    public void Knowledge_AddItem_ValidatesRequiredFields()
+    {
+        Services.AddScoped<IKnowledgeService>(_ => new FakeKnowledgeService());
+        Services.AddScoped<AuthenticationStateProvider>(_ => BuildAuthProvider("user-a"));
+
+        var cut = RenderComponent<CascadingAuthenticationState>(parameters =>
+            parameters.AddChildContent<Knowledge>());
+
+        cut.Find(".kn-create-btn").Click();
+
+        cut.WaitForAssertion(() =>
+            Assert.Contains("Category, title, and content are required.", cut.Markup));
+    }
+
+    [Fact]
+    public void Pages_ExposeExpectedAriaLabels()
+    {
+        Services.AddScoped<IWorkerCatalogService>(_ => new FakeWorkerCatalogService());
+        Services.AddScoped<IConversationService>(_ => new FakeConversationService(totalConversations: 2));
+        Services.AddScoped<IChatOrchestrationService>(_ => new FakeChatOrchestrationService());
+        Services.AddScoped<IKnowledgeService>(_ => new FakeKnowledgeService());
+        Services.AddScoped<AuthenticationStateProvider>(_ => BuildAuthProvider("user-a"));
+
+        var workforce = RenderComponent<CascadingAuthenticationState>(parameters =>
+            parameters.AddChildContent<Workforce>());
+
+        workforce.WaitForAssertion(() =>
+        {
+            Assert.NotNull(workforce.Find("select[aria-label='Select worker']"));
+            Assert.NotNull(workforce.Find("select[aria-label='Select conversation']"));
+            Assert.NotNull(workforce.Find("textarea[aria-label='Prompt input']"));
+            Assert.NotNull(workforce.Find("nav[aria-label='Conversation list paging']"));
+        });
+
+        var knowledge = RenderComponent<CascadingAuthenticationState>(parameters =>
+            parameters.AddChildContent<Knowledge>());
+
+        knowledge.WaitForAssertion(() =>
+        {
+            Assert.NotNull(knowledge.Find("input[aria-label='Knowledge category']"));
+            Assert.NotNull(knowledge.Find("input[aria-label='Knowledge title']"));
+            Assert.NotNull(knowledge.Find("textarea[aria-label='Knowledge content']"));
+            Assert.NotNull(knowledge.Find("nav[aria-label='Knowledge list paging']"));
+        });
+    }
+
+    private static AuthenticationStateProvider BuildAuthProvider(string userId)
+    {
+        var identity = new ClaimsIdentity(
+        [
+            new Claim(ClaimTypes.NameIdentifier, userId)
+        ],
+        "TestAuth");
+
+        var principal = new ClaimsPrincipal(identity);
+        var state = new AuthenticationState(principal);
+        return new TestAuthenticationStateProvider(state);
+    }
+
+    private sealed class TestAuthenticationStateProvider(AuthenticationState state) : AuthenticationStateProvider
+    {
+        public override Task<AuthenticationState> GetAuthenticationStateAsync() => Task.FromResult(state);
+    }
+
+    private sealed class FakeWorkerCatalogService : IWorkerCatalogService
+    {
+        public Task<IReadOnlyList<WorkerDefinition>> GetEnabledWorkersAsync(CancellationToken cancellationToken = default)
+        {
+            IReadOnlyList<WorkerDefinition> workers =
+            [
+                new WorkerDefinition
+                {
+                    Id = 1,
+                    Key = "general-assistant",
+                    DisplayName = "General Assistant",
+                    SystemPrompt = "You are helpful.",
+                    ModelName = "llama3.2:latest",
+                    IsEnabled = true,
+                    CreatedAtUtc = DateTime.UtcNow
+                }
+            ];
+
+            return Task.FromResult(workers);
+        }
+    }
+
+    private sealed class FakeConversationService(int totalConversations) : IConversationService
+    {
+        public Task<PagedResult<Conversation>> GetUserConversationsAsync(string applicationUserId, int pageNumber, int pageSize, CancellationToken cancellationToken = default)
+        {
+            IReadOnlyList<Conversation> items =
+            [
+                new Conversation
+                {
+                    Id = 1,
+                    ApplicationUserId = applicationUserId,
+                    WorkerDefinitionId = 1,
+                    Title = "First Conversation",
+                    CreatedAtUtc = DateTime.UtcNow,
+                    UpdatedAtUtc = DateTime.UtcNow
+                },
+                new Conversation
+                {
+                    Id = 2,
+                    ApplicationUserId = applicationUserId,
+                    WorkerDefinitionId = 1,
+                    Title = "Second Conversation",
+                    CreatedAtUtc = DateTime.UtcNow,
+                    UpdatedAtUtc = DateTime.UtcNow
+                }
+            ];
+
+            return Task.FromResult(new PagedResult<Conversation>(items, pageNumber, pageSize, totalConversations));
+        }
+
+        public Task<IReadOnlyList<ConversationMessage>?> GetConversationMessagesAsync(string applicationUserId, int conversationId, CancellationToken cancellationToken = default)
+        {
+            IReadOnlyList<ConversationMessage> items =
+            [
+                new ConversationMessage
+                {
+                    Id = 1,
+                    ConversationId = conversationId,
+                    Role = "user",
+                    Content = "Hello",
+                    CreatedAtUtc = DateTime.UtcNow
+                },
+                new ConversationMessage
+                {
+                    Id = 2,
+                    ConversationId = conversationId,
+                    Role = "assistant",
+                    Content = "Hi there",
+                    CreatedAtUtc = DateTime.UtcNow
+                }
+            ];
+
+            return Task.FromResult<IReadOnlyList<ConversationMessage>?>(items);
+        }
+
+        public Task<bool> RenameConversationAsync(string applicationUserId, int conversationId, string title, CancellationToken cancellationToken = default)
+            => Task.FromResult(true);
+
+        public Task<bool> DeleteConversationAsync(string applicationUserId, int conversationId, CancellationToken cancellationToken = default)
+            => Task.FromResult(true);
+    }
+
+    private sealed class FakeKnowledgeService : IKnowledgeService
+    {
+        public Task<PagedResult<UserKnowledgeItem>> GetUserKnowledgeItemsAsync(string applicationUserId, int pageNumber, int pageSize, CancellationToken cancellationToken = default)
+        {
+            var result = new PagedResult<UserKnowledgeItem>([], pageNumber, pageSize, 0);
+            return Task.FromResult(result);
+        }
+
+        public Task<UserKnowledgeItem> AddKnowledgeItemAsync(string applicationUserId, string category, string title, string content, CancellationToken cancellationToken = default)
+        {
+            var item = new UserKnowledgeItem
+            {
+                Id = 1,
+                ApplicationUserId = applicationUserId,
+                Category = category,
+                Title = title,
+                Content = content,
+                IsEnabled = true,
+                CreatedAtUtc = DateTime.UtcNow
+            };
+
+            return Task.FromResult(item);
+        }
+
+        public Task<bool> ToggleKnowledgeItemAsync(string applicationUserId, int itemId, CancellationToken cancellationToken = default)
+            => Task.FromResult(true);
+
+        public Task<bool> DeleteKnowledgeItemAsync(string applicationUserId, int itemId, CancellationToken cancellationToken = default)
+            => Task.FromResult(true);
+    }
+
+    private sealed class FakeChatOrchestrationService : IChatOrchestrationService
+    {
+        public Task<ChatSendResult> SendPromptAsync(string applicationUserId, int workerId, string prompt, int? selectedConversationId, CancellationToken cancellationToken = default)
+        {
+            var result = new ChatSendResult(1, "First Conversation", "Acknowledged");
+            return Task.FromResult(result);
+        }
+    }
+}

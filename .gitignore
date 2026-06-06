@@ -1,0 +1,39 @@
+# Build output
+bin/
+obj/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+
+# Rider / ReSharper
+.idea/
+*.sln.iml
+
+# Test output
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+# Logs and temp
+*.log
+*.tmp
+
+# OS files
+.DS_Store
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
