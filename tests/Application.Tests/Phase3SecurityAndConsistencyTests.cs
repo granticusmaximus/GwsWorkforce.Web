@@ -436,6 +436,27 @@ public class Phase3SecurityAndConsistencyTests
         Assert.DoesNotContain(messages, x => x.Role == "assistant");
     }
 
+    [Fact]
+    public async Task NonChatCapableModel_BadRequest_MapsToActionableErrorMessage()
+    {
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent("model does not support chat")
+        }));
+
+        var client = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("http://localhost:11434")
+        };
+
+        var service = new OllamaChatService(client);
+
+        var ex = await Assert.ThrowsAsync<OllamaChatException>(() =>
+            service.ChatAsync("x/z-image-turbo:latest", "sys", "user", null, CancellationToken.None));
+
+        Assert.Contains("may not support chat completions", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static ApplicationDbContext CreateDbContext(string? dbName = null)
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

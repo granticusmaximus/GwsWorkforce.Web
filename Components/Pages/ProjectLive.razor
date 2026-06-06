@@ -1,0 +1,299 @@
+@page "/projects/{projectKey}/live"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using GwsWorkforce.Web.Application.Contracts
+@using GwsWorkforce.Web.Models.Workforce
+@using GwsWorkforce.Web.Services
+@using GwsWorkforce.Web.Services.Ollama
+@using Microsoft.AspNetCore.Authorization
+
+@inject IConversationService ConversationService
+@inject IWorkerCatalogService WorkerCatalogService
+@inject IChatOrchestrationService ChatOrchestrationService
+@inject ProjectDraftStore ProjectDraftStore
+@inject NavigationManager NavigationManager
+
+<PageTitle>Live Collaboration</PageTitle>
+
+<div class="pl-page" aria-busy="@isBusy">
+    <header class="pl-header">
+        <p class="pl-eyebrow">GWS Workforce</p>
+        <h1>@projectName</h1>
+        <p class="pl-subtitle">Live collaboration activity stream</p>
+        <button class="btn btn-outline-primary btn-sm" @onclick="OpenProjectChats">Project Chats</button>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(errorMessage))
+    {
+        <StatusBanner Message="@errorMessage" Variant="error" />
+    }
+
+    <section class="pl-prompt-panel">
+        <label class="pl-label" for="projectPrompt">Project Prompt</label>
+        <textarea id="projectPrompt" class="form-control" rows="4" @bind="collaborationPrompt"
+                  aria-label="Project prompt"></textarea>
+        <div class="pl-prompt-actions">
+            <button class="btn btn-primary" @onclick="RunUpdatedPromptAsync" disabled="@isBusy">@(isBusy ? "Running..." : "Run Updated Prompt")</button>
+        </div>
+    </section>
+
+    <section class="pl-terminal" aria-live="polite" aria-label="Live collaboration terminal">
+        @if (activityLines.Count == 0)
+        {
+            <div class="pl-line">Waiting for activity...</div>
+        }
+        else
+        {
+            @foreach (var line in activityLines)
+            {
+                <div class="pl-line">@line</div>
+            }
+        }
+    </section>
+</div>
+
+@code {
+    [Parameter]
+    public string projectKey { get; set; } = string.Empty;
+
+    [SupplyParameterFromQuery(Name = "goal")]
+    public string? Goal { get; set; }
+
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    private readonly List<string> activityLines = [];
+    private string projectName = string.Empty;
+    private string collaborationPrompt = string.Empty;
+    private string errorMessage = string.Empty;
+    private bool isBusy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        projectName = ProjectNaming.DecodeProjectKey(projectKey);
+        collaborationPrompt = Goal?.Trim() ?? ProjectDraftStore.TakeDraft(projectKey) ?? string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(collaborationPrompt))
+        {
+            await RunCollaborativeProjectAsync(userId, collaborationPrompt);
+        }
+
+        await LoadExistingActivityAsync(userId);
+    }
+
+    private async Task RunUpdatedPromptAsync()
+    {
+        errorMessage = string.Empty;
+
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(collaborationPrompt))
+        {
+            errorMessage = "Project prompt is required.";
+            return;
+        }
+
+        await RunCollaborativeProjectAsync(userId, collaborationPrompt.Trim());
+    }
+
+    private async Task RunCollaborativeProjectAsync(string userId, string goal)
+    {
+        var workers = await WorkerCatalogService.GetEnabledWorkersAsync();
+        if (workers.Count == 0)
+        {
+            errorMessage = "At least one enabled worker is required.";
+            return;
+        }
+
+        isBusy = true;
+        activityLines.Add($"[{DateTime.Now:T}] Project kickoff started.");
+        StateHasChanged();
+
+        try
+        {
+            activityLines.Add($"[{DateTime.Now:T}] Using {workers.Count} chat-capable workers for this run.");
+            var kickoffPrompt = BuildProjectKickoffPrompt(projectName, goal);
+            var tasks = workers
+                .Select(worker => TryStartWorkerTrackAsync(userId, worker, kickoffPrompt))
+                .ToList();
+
+            var completed = new List<WorkerTrack>();
+            while (tasks.Count > 0)
+            {
+                var completedTask = await Task.WhenAny(tasks);
+                tasks.Remove(completedTask);
+                var result = await completedTask;
+
+                if (result.IsSuccess)
+                {
+                    completed.Add(result);
+                    activityLines.Add($"[{DateTime.Now:T}] {result.WorkerName} completed contribution.");
+                }
+                else
+                {
+                    activityLines.Add($"[{DateTime.Now:T}] {result.WorkerName} failed: {result.ErrorReason}");
+                }
+
+                StateHasChanged();
+            }
+
+            if (completed.Count == 0)
+            {
+                errorMessage = "All workers failed this run. Update the prompt or review worker availability.";
+                return;
+            }
+
+            var coordinator = SelectCoordinator(workers, completed);
+            activityLines.Add($"[{DateTime.Now:T}] Running collective synthesis via {coordinator.DisplayName}.");
+            StateHasChanged();
+
+            var synthesisPrompt = BuildCollectiveSynthesisPrompt(projectName, goal, completed);
+            var collectiveResult = await ChatOrchestrationService.SendPromptAsync(userId, coordinator.Id, synthesisPrompt,
+selectedConversationId: null);
+
+            await ConversationService.RenameConversationAsync(userId, collectiveResult.ConversationId,
+ProjectNaming.BuildConversationTitle(projectName, "Collective"));
+
+            activityLines.Add($"[{DateTime.Now:T}] Collective synthesis complete.");
+        }
+        catch (OllamaChatException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (InvalidOperationException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to run collaboration: {ex.Message}";
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+
+    private async Task<WorkerTrack> TryStartWorkerTrackAsync(string userId, WorkerDefinition worker, string kickoffPrompt)
+    {
+        try
+        {
+            var result = await ChatOrchestrationService.SendPromptAsync(userId, worker.Id, kickoffPrompt, selectedConversationId:
+null);
+            await ConversationService.RenameConversationAsync(userId, result.ConversationId,
+ProjectNaming.BuildConversationTitle(projectName, worker.DisplayName));
+            return new WorkerTrack(worker.Id, worker.DisplayName, result.AssistantResponse, true, null);
+        }
+        catch (Exception ex)
+        {
+            return new WorkerTrack(worker.Id, worker.DisplayName, string.Empty, false, ex.Message);
+        }
+    }
+
+    private async Task LoadExistingActivityAsync(string userId)
+    {
+        var projectConversations = await LoadProjectConversationsAsync(userId);
+
+        foreach (var conversation in projectConversations)
+        {
+            var messages = await ConversationService.GetConversationMessagesAsync(userId, conversation.Id) ?? [];
+
+            foreach (var message in messages.OrderBy(x => x.CreatedAtUtc))
+            {
+                var title = conversation.Title;
+                var snippet = message.Content.Length > 140
+                    ? $"{message.Content[..140]}..."
+                    : message.Content;
+
+                activityLines.Add($"[{message.CreatedAtUtc.ToLocalTime():T}] [{title}] {message.Role}: {snippet}");
+            }
+        }
+
+        if (activityLines.Count > 0)
+        {
+            activityLines.Sort(StringComparer.Ordinal);
+        }
+    }
+
+    private async Task<IReadOnlyList<Conversation>> LoadProjectConversationsAsync(string userId)
+    {
+        const int pageSize = 50;
+
+        var pageNumber = 1;
+        var all = new List<Conversation>();
+
+        while (true)
+        {
+            var page = await ConversationService.GetUserConversationsAsync(userId, pageNumber, pageSize);
+            all.AddRange(page.Items);
+
+            if (page.PageNumber >= page.TotalPages)
+            {
+                break;
+            }
+
+            pageNumber++;
+        }
+
+        return all
+            .Where(x => ProjectNaming.TryExtractProjectName(x.Title, out var extracted) &&
+                        string.Equals(extracted, projectName, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(x => x.UpdatedAtUtc ?? x.CreatedAtUtc)
+            .ToList();
+    }
+
+    private static WorkerDefinition SelectCoordinator(IReadOnlyList<WorkerDefinition> availableWorkers,
+IReadOnlyList<WorkerTrack> successfulTracks)
+    {
+        var successfulWorkerIds = successfulTracks.Select(x => x.WorkerId).ToHashSet();
+        var successfulWorkers = availableWorkers.Where(x => successfulWorkerIds.Contains(x.Id)).ToList();
+
+        return successfulWorkers.FirstOrDefault(x =>
+                   x.DisplayName.Contains("general", StringComparison.OrdinalIgnoreCase) ||
+                   x.Key.Contains("general", StringComparison.OrdinalIgnoreCase))
+               ?? successfulWorkers[0];
+    }
+
+    private static string BuildProjectKickoffPrompt(string project, string goal)
+    {
+        return $"Project: {project}\nGoal: {goal}\n\nWork this as a team contributor. Provide:\n1. Your strongest approach\n2. Risks you see\n3. Dependencies\n4. Concrete next actions";
+    }
+
+    private static string BuildCollectiveSynthesisPrompt(string project, string goal, IReadOnlyList<WorkerTrack> tracks)
+    {
+        var workerContributions = string.Join(
+            "\n\n",
+            tracks.Select(track =>
+                $"Contributor: {track.WorkerName}\nResponse:\n{track.Response}"));
+
+        return $"Project: {project}\nGoal: {goal}\n\nThe following contributors worked in parallel:\n\n{workerContributions}\n\nSynthesize one collective plan that integrates the best ideas across contributors. Include:\n1. Final recommended approach\n2. Combined phased plan\n3. Cross-contributor dependency map\n4. Immediate next 3 actions.";
+    }
+
+    private void OpenProjectChats()
+    {
+        NavigationManager.NavigateTo($"/projects/{projectKey}");
+    }
+
+    private async Task<string?> GetCurrentUserIdAsync()
+    {
+        var authenticationState = AuthenticationStateTask is null ? null : await AuthenticationStateTask;
+        return authenticationState?.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    }
+
+    private sealed record WorkerTrack(int WorkerId, string WorkerName, string Response, bool IsSuccess, string?
+ErrorReason);
+}

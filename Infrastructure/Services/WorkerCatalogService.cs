@@ -9,9 +9,29 @@ public sealed class WorkerCatalogService(ApplicationDbContext dbContext) : IWork
 {
     public async Task<IReadOnlyList<WorkerDefinition>> GetEnabledWorkersAsync(CancellationToken cancellationToken = default)
     {
-        return await dbContext.WorkerDefinitions
+        var enabledWorkers = await dbContext.WorkerDefinitions
             .Where(x => x.IsEnabled)
             .OrderBy(x => x.DisplayName)
             .ToListAsync(cancellationToken);
+
+        return enabledWorkers
+            .Where(SupportsChat)
+            .ToList();
+    }
+
+    private static bool SupportsChat(WorkerDefinition worker)
+    {
+        // Image-generation or diffusion-focused workers frequently reject /api/chat requests.
+        if (worker.Key.Contains("image", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (worker.ModelName.Contains("image", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
     }
 }

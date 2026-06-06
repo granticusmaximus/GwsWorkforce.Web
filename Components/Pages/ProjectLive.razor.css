@@ -1,0 +1,72 @@
+.pl-page {
+    padding: 1.45rem;
+    border-radius: 1.5rem;
+    border: 1px solid rgba(170, 198, 225, 0.5);
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.52) 0%, rgba(231, 242, 255, 0.35) 100%);
+}
+
+.pl-header {
+    display: flex;
+    gap: 0.8rem;
+    align-items: end;
+    flex-wrap: wrap;
+}
+
+.pl-eyebrow {
+    margin: 0;
+    color: #0e5da7;
+    font-weight: 680;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    width: 100%;
+}
+
+.pl-header h1 {
+    margin: 0;
+    color: #12263f;
+}
+
+.pl-subtitle {
+    margin: 0;
+    color: #3a5576;
+    width: 100%;
+}
+
+.pl-prompt-panel {
+    margin-top: 1rem;
+    border: 1px solid rgba(150, 180, 210, 0.48);
+    border-radius: 0.8rem;
+    padding: 0.8rem;
+    background: rgba(248, 253, 255, 0.72);
+}
+
+.pl-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #385372;
+    margin-bottom: 0.4rem;
+}
+
+.pl-prompt-actions {
+    margin-top: 0.65rem;
+}
+
+.pl-terminal {
+    margin-top: 1rem;
+    background: #0d1a2b;
+    border-radius: 0.9rem;
+    border: 1px solid #213758;
+    color: #d8e6f7;
+    font-family: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    padding: 0.9rem;
+    max-height: 62vh;
+    overflow: auto;
+}
+
+.pl-line {
+    white-space: pre-wrap;
+    line-height: 1.4;
+    margin: 0 0 0.35rem;
+    font-size: 0.86rem;
+}

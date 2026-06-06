@@ -83,6 +83,7 @@ The CI workflow enforces:
 
 - Build artifacts and local DB files are ignored via `.gitignore`.
 - Only this root `README.md` is intended for public markdown documentation.
+- Enterprise readiness tracking plan: `docs/Enterprise-Readiness-Plan.md`.
 
 ## Delivery Status
 

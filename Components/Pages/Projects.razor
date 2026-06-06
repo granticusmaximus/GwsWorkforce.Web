@@ -5,12 +5,12 @@
 @using System.Security.Claims
 @using GwsWorkforce.Web.Application.Contracts
 @using GwsWorkforce.Web.Models.Workforce
+@using GwsWorkforce.Web.Services
 @using GwsWorkforce.Web.Services.Ollama
 @using Microsoft.AspNetCore.Authorization
 
 @inject IConversationService ConversationService
-@inject IWorkerCatalogService WorkerCatalogService
-@inject IChatOrchestrationService ChatOrchestrationService
+@inject ProjectDraftStore ProjectDraftStore
 @inject NavigationManager NavigationManager
 
 <PageTitle>Projects</PageTitle>
@@ -19,7 +19,12 @@
     <header class="pj-header">
         <p class="pj-eyebrow">GWS Workforce</p>
         <h1>Projects</h1>
-        <p class="pj-subtitle">Organize work by project and jump straight into a dedicated conversation.</p>
+        <p class="pj-subtitle">Create and manage collaborative projects across your worker team.</p>
+
+        @if (!isLoading && projects.Count > 0)
+        {
+            <button class="btn btn-outline-primary btn-sm pj-header-create" @onclick="OpenCreateModal">New Project</button>
+        }
     </header>
 
     @if (isLoading)
@@ -33,67 +38,103 @@
             <StatusBanner Message="@errorMessage" Variant="error" />
         }
 
-        <section class="pj-panel pj-create">
-            <h2>Start Project Chat</h2>
-
-            <label class="pj-label" for="projectName">Project</label>
-            <input id="projectName" class="form-control" @bind="projectName" aria-label="Project name" />
-
-            <label class="pj-label" for="projectGoal">Goal</label>
-            <textarea id="projectGoal" class="form-control" rows="4" @bind="projectGoal" aria-label="Project goal"></textarea>
-
-            <label class="pj-label" for="projectWorker">Worker</label>
-            <select id="projectWorker" class="form-select" @bind="selectedWorkerId" aria-label="Project worker">
-                @foreach (var worker in workers)
+        @if (projects.Count == 0)
+        {
+            <section class="pj-empty-state">
+                <button class="btn btn-primary btn-lg pj-empty-start" @onclick="OpenCreateModal">Start a New Project</button>
+            </section>
+        }
+        else
+        {
+            <section class="pj-grid" aria-label="Project grid">
+                @foreach (var project in projects)
                 {
-                    <option value="@worker.Id">@worker.DisplayName (@worker.ModelName)</option>
+                    <article class="pj-folder">
+                        <i class="bi bi-folder-fill pj-folder-icon" aria-hidden="true"></i>
+                        <span class="pj-folder-name">@project.Name</span>
+                        <span class="pj-folder-meta">@project.ConversationCount chats</span>
+
+                        <div class="pj-folder-actions">
+                            <button class="btn btn-primary btn-sm" @onclick="() => OpenProject(project.Name)">Open</button>
+                            <button class="btn btn-outline-danger btn-sm"
+                                    @onclick="() => OpenDeleteModal(project.Name)">Delete</button>
+                        </div>
+                    </article>
                 }
-            </select>
-
-            <button class="btn btn-primary pj-create-btn" @onclick="StartProjectAsync" disabled="@isSubmitting">
-                @(isSubmitting ? "Starting..." : "Start")
-            </button>
-        </section>
-
-        <section class="pj-panel pj-list">
-            <h2>Existing Projects</h2>
-
-            @if (projects.Count == 0)
-            {
-                <p class="pj-empty">No projects yet. Start one above.</p>
-            }
-            else
-            {
-                <div class="pj-items">
-                    @foreach (var project in projects)
-                    {
-                        <article class="pj-item">
-                            <header>
-                                <strong>@project.Name</strong>
-                                <span class="pj-count">@project.ConversationCount chats</span>
-                            </header>
-                            <p class="pj-meta">Last activity: @project.LastActivityUtc.ToLocalTime().ToString("g")</p>
-                            <button class="btn btn-outline-primary btn-sm" @onclick="() => OpenProjectChat(project.LatestConversationId)">Open</button>
-                        </article>
-                    }
-                </div>
-            }
-        </section>
+            </section>
+        }
     }
 </div>
+
+@if (showCreateModal)
+{
+    <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="createProjectTitle">
+        <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
+            <div class="modal-content pj-modal">
+                <div class="modal-header">
+                    <h2 id="createProjectTitle" class="modal-title fs-5">Start a New Project</h2>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="CloseCreateModal"></button>
+                </div>
+                <div class="modal-body">
+                    <label class="pj-label" for="projectName">Project Title</label>
+                    <input id="projectName" class="form-control" @bind="projectName" aria-label="Project title" />
+
+                    <label class="pj-label mt-2" for="projectGoal">Collaboration Prompt</label>
+                    <textarea id="projectGoal" class="form-control" rows="8" @bind="projectGoal"
+                              aria-label="Project collaboration prompt"></textarea>
+                    <p class="pj-note mt-2">All enabled workers collaborate on this one task, then a collective synthesis is
+                        produced.</p>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-outline-secondary" @onclick="CloseCreateModal"
+                                disabled="@isSubmitting">Cancel</button>
+                        <button class="btn btn-primary" @onclick="StartProjectAsync" disabled="@isSubmitting">
+                            @(isSubmitting ? "Starting..." : "Start")
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-backdrop fade show"></div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(projectPendingDelete))
+    {
+        <div class="modal fade show d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="deleteProjectTitle">
+            <div class="modal-dialog modal-dialog-centered" role="document">
+                <div class="modal-content pj-modal">
+                    <div class="modal-header">
+                        <h2 id="deleteProjectTitle" class="modal-title fs-5">Delete Project</h2>
+                        <button type="button" class="btn-close" aria-label="Close" @onclick="CloseDeleteModal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="mb-0">Delete project <strong>@projectPendingDelete</strong> and all its chats?</p>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-outline-secondary" @onclick="CloseDeleteModal"
+                                disabled="@isDeletingProject">Cancel</button>
+                        <button class="btn btn-danger" @onclick="DeleteProjectAsync"
+                                disabled="@isDeletingProject">@(isDeletingProject ? "Deleting..." : "Delete")</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-backdrop fade show"></div>
+    }
 
 @code {
     [CascadingParameter]
     private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
 
-    private readonly List<WorkerDefinition> workers = [];
     private readonly List<ProjectSummary> projects = [];
 
     private bool isLoading = true;
     private bool isSubmitting;
-    private int selectedWorkerId;
+    private bool isDeletingProject;
+    private bool showCreateModal;
     private string projectName = string.Empty;
     private string projectGoal = string.Empty;
+    private string projectPendingDelete = string.Empty;
     private string errorMessage = string.Empty;
 
     protected override async Task OnInitializedAsync()
@@ -106,21 +147,9 @@
             return;
         }
 
-        await LoadWorkersAsync();
         await LoadProjectsAsync(userId);
 
-        if (workers.Count > 0)
-        {
-            selectedWorkerId = workers[0].Id;
-        }
-
         isLoading = false;
-    }
-
-    private async Task LoadWorkersAsync()
-    {
-        workers.Clear();
-        workers.AddRange(await WorkerCatalogService.GetEnabledWorkersAsync());
     }
 
     private async Task LoadProjectsAsync(string userId)
@@ -130,7 +159,11 @@
         var allConversations = await LoadAllConversationsAsync(userId);
 
         var grouped = allConversations
-            .Select(x => new { Conversation = x, ProjectName = ExtractProjectName(x.Title) })
+            .Select(x =>
+            {
+                _ = ProjectNaming.TryExtractProjectName(x.Title, out var projectNameValue);
+                return new { Conversation = x, ProjectName = projectNameValue };
+            })
             .Where(x => !string.IsNullOrWhiteSpace(x.ProjectName))
             .GroupBy(x => x.ProjectName!, StringComparer.OrdinalIgnoreCase)
             .Select(group =>
@@ -140,11 +173,13 @@
                     .OrderByDescending(x => x.UpdatedAtUtc ?? x.CreatedAtUtc)
                     .First();
 
-                return new ProjectSummary(
-                    group.Key,
-                    group.Count(),
-                    latest.UpdatedAtUtc ?? latest.CreatedAtUtc,
-                    latest.Id);
+                return new ProjectSummary
+                {
+                    Name = group.Key,
+                    ConversationCount = group.Count(),
+                    LastActivityUtc = latest.UpdatedAtUtc ?? latest.CreatedAtUtc,
+                    LatestConversationId = latest.Id
+                };
             })
             .OrderByDescending(x => x.LastActivityUtc);
 
@@ -184,9 +219,57 @@
             return;
         }
 
-        if (workers.All(x => x.Id != selectedWorkerId))
+        isSubmitting = true;
+
+        try
         {
-            errorMessage = "Select a worker.";
+            var projectKey = ProjectNaming.EncodeProjectKey(projectName);
+            ProjectDraftStore.SetDraft(projectKey, projectGoal.Trim());
+            NavigationManager.NavigateTo($"/projects/{projectKey}/live", forceLoad: true);
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+
+    private void OpenCreateModal()
+    {
+        showCreateModal = true;
+    }
+
+    private void CloseCreateModal()
+    {
+        showCreateModal = false;
+    }
+
+    private void OpenProject(string projectNameValue)
+    {
+        var projectKey = ProjectNaming.EncodeProjectKey(projectNameValue);
+        NavigationManager.NavigateTo($"/projects/{projectKey}");
+    }
+
+    private void OpenDeleteModal(string projectNameValue)
+    {
+        projectPendingDelete = projectNameValue;
+    }
+
+    private void CloseDeleteModal()
+    {
+        if (isDeletingProject)
+        {
+            return;
+        }
+
+        projectPendingDelete = string.Empty;
+    }
+
+    private async Task DeleteProjectAsync()
+    {
+        errorMessage = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(projectPendingDelete))
+        {
             return;
         }
 
@@ -197,73 +280,41 @@
             return;
         }
 
-        isSubmitting = true;
+        isDeletingProject = true;
 
         try
         {
-            var normalizedProjectName = projectName.Trim();
-            var kickoffPrompt = BuildProjectKickoffPrompt(normalizedProjectName, projectGoal.Trim());
+            var allConversations = await LoadAllConversationsAsync(userId);
+            var targets = allConversations
+                .Where(x => ProjectNaming.TryExtractProjectName(x.Title, out var extracted) &&
+                            string.Equals(extracted, projectPendingDelete, StringComparison.OrdinalIgnoreCase))
+                .Select(x => x.Id)
+                .ToList();
 
-            var result = await ChatOrchestrationService.SendPromptAsync(
-                userId,
-                selectedWorkerId,
-                kickoffPrompt,
-                selectedConversationId: null);
+            var failed = 0;
 
-            await ConversationService.RenameConversationAsync(userId, result.ConversationId, $"Project: {normalizedProjectName}");
+            foreach (var conversationId in targets)
+            {
+                var deleted = await ConversationService.DeleteConversationAsync(userId, conversationId);
+                if (!deleted)
+                {
+                    failed++;
+                }
+            }
 
-            NavigationManager.NavigateTo($"/workforce?conversationId={result.ConversationId}");
-        }
-        catch (OllamaChatException ex)
-        {
-            errorMessage = ex.Message;
-        }
-        catch (InvalidOperationException ex)
-        {
-            errorMessage = ex.Message;
-        }
-        catch (Exception ex)
-        {
-            errorMessage = $"Failed to start project: {ex.Message}";
+            await LoadProjectsAsync(userId);
+
+            if (failed > 0)
+            {
+                errorMessage = $"Some chats could not be deleted ({failed}).";
+            }
+
+            projectPendingDelete = string.Empty;
         }
         finally
         {
-            isSubmitting = false;
+            isDeletingProject = false;
         }
-    }
-
-    private void OpenProjectChat(int conversationId)
-    {
-        NavigationManager.NavigateTo($"/workforce?conversationId={conversationId}");
-    }
-
-    private static string BuildProjectKickoffPrompt(string project, string goal)
-    {
-        return $"Project: {project}\nGoal: {goal}\n\nCreate a practical first-step plan with clear next actions.";
-    }
-
-    private static string? ExtractProjectName(string title)
-    {
-        const string prefix = "Project:";
-
-        if (!title.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        var raw = title[prefix.Length..].Trim();
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return null;
-        }
-
-        var separatorIndex = raw.IndexOf('|');
-        if (separatorIndex >= 0)
-        {
-            raw = raw[..separatorIndex].Trim();
-        }
-
-        return string.IsNullOrWhiteSpace(raw) ? null : raw;
     }
 
     private async Task<string?> GetCurrentUserIdAsync()
@@ -272,9 +323,4 @@
         return authenticationState?.User.FindFirstValue(ClaimTypes.NameIdentifier);
     }
 
-    private sealed record ProjectSummary(
-        string Name,
-        int ConversationCount,
-        DateTime LastActivityUtc,
-        int LatestConversationId);
 }

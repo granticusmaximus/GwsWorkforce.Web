@@ -4,6 +4,7 @@ using GwsWorkforce.Web.Application.Contracts;
 using GwsWorkforce.Web.Application.Models;
 using GwsWorkforce.Web.Components.Pages;
 using GwsWorkforce.Web.Models.Workforce;
+using GwsWorkforce.Web.Services;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -254,6 +255,26 @@ public class Phase2UiComponentTests : TestContext
             Assert.Contains("is-pass", verifierPill.ClassList);
             Assert.Equal("+", cut.Find(".wf-verifier-icon").TextContent.Trim());
             Assert.Contains("Verifier accepted response.", cut.Markup);
+        });
+    }
+
+    [Fact]
+    public void Projects_RendersForAuthenticatedUser()
+    {
+        Services.AddScoped<IWorkerCatalogService>(_ => new FakeWorkerCatalogService());
+        Services.AddScoped<IConversationService>(_ => new FakeConversationService(totalConversations: 2));
+        Services.AddScoped<IChatOrchestrationService>(_ => new FakeChatOrchestrationService());
+        Services.AddScoped<ProjectDraftStore>(_ => new ProjectDraftStore());
+        Services.AddScoped<AuthenticationStateProvider>(_ => BuildAuthProvider("user-a"));
+
+        var cut = RenderComponent<CascadingAuthenticationState>(parameters =>
+            parameters.AddChildContent<Projects>());
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("Projects", cut.Markup);
+            Assert.NotNull(cut.Find(".pj-empty-start"));
+            Assert.Contains("Start a New Project", cut.Markup);
         });
     }
 

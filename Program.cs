@@ -6,6 +6,7 @@ using GwsWorkforce.Web.Components.Account;
 using GwsWorkforce.Web.Data;
 using GwsWorkforce.Web.Application.Contracts;
 using GwsWorkforce.Web.Infrastructure.Services;
+using GwsWorkforce.Web.Services;
 using GwsWorkforce.Web.Services.Ollama;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -37,6 +38,7 @@ builder.Services.AddScoped<IWorkerCatalogService, WorkerCatalogService>();
 builder.Services.AddScoped<IConversationService, ConversationService>();
 builder.Services.AddScoped<IKnowledgeService, KnowledgeService>();
 builder.Services.AddScoped<IChatOrchestrationService, ChatOrchestrationService>();
+builder.Services.AddScoped<ProjectDraftStore>();
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
@@ -64,12 +66,35 @@ else
     // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
     app.UseHsts();
 }
+
+app.Use(async (context, next) =>
+{
+    await next();
+
+    if (context.Response.StatusCode == StatusCodes.Status404NotFound)
+    {
+        app.Logger.LogWarning(
+            "404 Not Found: {Method} {Path}{Query} Referer={Referer}",
+            context.Request.Method,
+            context.Request.Path,
+            context.Request.QueryString,
+            context.Request.Headers.Referer.ToString());
+    }
+});
+
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseHttpsRedirection();
 
 app.UseAntiforgery();
 
 app.MapStaticAssets();
+
+// Compatibility redirects for removed starter-template pages.
+app.MapGet("/counter", () => Results.Redirect("/projects", permanent: false));
+app.MapGet("/Counter", () => Results.Redirect("/projects", permanent: false));
+app.MapGet("/weather", () => Results.Redirect("/projects", permanent: false));
+app.MapGet("/Weather", () => Results.Redirect("/projects", permanent: false));
+
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 

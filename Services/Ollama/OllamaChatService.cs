@@ -71,10 +71,16 @@ public sealed class OllamaChatService(HttpClient httpClient)
     {
         var lower = body.ToLowerInvariant();
         var modelMissing = lower.Contains("model") && (lower.Contains("not found") || lower.Contains("unknown") || lower.Contains("pull"));
+        var notChatCapable = lower.Contains("chat") && (lower.Contains("not supported") || lower.Contains("unsupported") || lower.Contains("cannot"));
 
         if (statusCode == System.Net.HttpStatusCode.NotFound || modelMissing)
         {
             return $"The selected model '{modelName}' is not available in Ollama. Confirm it is installed and try again.";
+        }
+
+        if (statusCode == System.Net.HttpStatusCode.BadRequest || notChatCapable)
+        {
+            return $"The selected model '{modelName}' rejected /api/chat and may not support chat completions. Use a chat-capable model and retry. Ollama says: {body}";
         }
 
         return $"Ollama request failed ({(int)statusCode}). {body}";

@@ -1,0 +1,128 @@
+@page "/projects/{projectKey}"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using GwsWorkforce.Web.Application.Contracts
+@using GwsWorkforce.Web.Models.Workforce
+@using Microsoft.AspNetCore.Authorization
+
+@inject IConversationService ConversationService
+@inject NavigationManager NavigationManager
+
+<PageTitle>Project Chats</PageTitle>
+
+<div class="pc-page" aria-busy="@isLoading">
+    <header class="pc-header">
+        <p class="pc-eyebrow">GWS Workforce</p>
+        <h1>@projectName</h1>
+        <p class="pc-subtitle">All chats for this project.</p>
+        <button class="btn btn-outline-primary btn-sm" @onclick="OpenLive">Live Collaboration</button>
+    </header>
+
+    @if (isLoading)
+    {
+        <div class="pc-loading">Loading project chats...</div>
+    }
+    else if (!string.IsNullOrWhiteSpace(errorMessage))
+    {
+        <StatusBanner Message="@errorMessage" Variant="error" />
+    }
+    else if (projectConversations.Count == 0)
+    {
+        <p class="pc-empty">No chats found for this project yet.</p>
+    }
+    else
+    {
+        <section class="pc-grid" aria-label="Project chats">
+            @foreach (var chat in projectConversations)
+            {
+                <article class="pc-chat">
+                    <h2>@chat.Title</h2>
+                    <p>Updated: @(chat.UpdatedAtUtc ?? chat.CreatedAtUtc).ToLocalTime().ToString("g")</p>
+                    <button class="btn btn-primary btn-sm" @onclick="() => OpenChat(chat.Id)">Open Chat</button>
+                </article>
+            }
+        </section>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public string projectKey { get; set; } = string.Empty;
+
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    private readonly List<Conversation> projectConversations = [];
+    private bool isLoading = true;
+    private string errorMessage = string.Empty;
+    private string projectName = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            isLoading = false;
+            return;
+        }
+
+        projectName = ProjectNaming.DecodeProjectKey(projectKey);
+        await LoadProjectConversationsAsync(userId);
+
+        isLoading = false;
+    }
+
+    private async Task LoadProjectConversationsAsync(string userId)
+    {
+        projectConversations.Clear();
+
+        var allConversations = await LoadAllConversationsAsync(userId);
+        projectConversations.AddRange(
+            allConversations
+                .Where(x => ProjectNaming.TryExtractProjectName(x.Title, out var extracted) &&
+                            string.Equals(extracted, projectName, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(x => x.UpdatedAtUtc ?? x.CreatedAtUtc));
+    }
+
+    private async Task<IReadOnlyList<Conversation>> LoadAllConversationsAsync(string userId)
+    {
+        const int pageSize = 50;
+
+        var pageNumber = 1;
+        var all = new List<Conversation>();
+
+        while (true)
+        {
+            var page = await ConversationService.GetUserConversationsAsync(userId, pageNumber, pageSize);
+            all.AddRange(page.Items);
+
+            if (page.PageNumber >= page.TotalPages)
+            {
+                break;
+            }
+
+            pageNumber++;
+        }
+
+        return all;
+    }
+
+    private void OpenChat(int conversationId)
+    {
+        NavigationManager.NavigateTo($"/workforce?conversationId={conversationId}");
+    }
+
+    private void OpenLive()
+    {
+        NavigationManager.NavigateTo($"/projects/{projectKey}/live");
+    }
+
+    private async Task<string?> GetCurrentUserIdAsync()
+    {
+        var authenticationState = AuthenticationStateTask is null ? null : await AuthenticationStateTask;
+        return authenticationState?.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    }
+}
