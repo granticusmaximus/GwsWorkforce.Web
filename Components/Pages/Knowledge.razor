@@ -1,0 +1,285 @@
+@page "/knowledge"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using GwsWorkforce.Web.Application.Contracts
+@using GwsWorkforce.Web.Models.Workforce
+@using Microsoft.AspNetCore.Authorization
+
+@inject IKnowledgeService KnowledgeService
+
+<PageTitle>Knowledge</PageTitle>
+
+<div class="kn-page">
+    <header class="kn-header">
+        <p class="kn-eyebrow">GWS Workforce</p>
+        <h1>Knowledge Vault</h1>
+        <p class="kn-subtitle">Store private user-scoped context that powers better worker responses.</p>
+    </header>
+
+    @if (isLoading)
+    {
+        <div class="kn-loading">Loading your knowledge items...</div>
+    }
+    else
+    {
+        <div class="kn-layout">
+            <section class="kn-panel kn-create">
+                <h2>Add Knowledge Item</h2>
+                <label class="kn-label" for="knowledgeCategory">Category</label>
+                <input id="knowledgeCategory" class="form-control" @bind="newCategory" />
+
+                <label class="kn-label" for="knowledgeTitle">Title</label>
+                <input id="knowledgeTitle" class="form-control" @bind="newTitle" />
+
+                <label class="kn-label" for="knowledgeContent">Content</label>
+                <textarea id="knowledgeContent" class="form-control" rows="6" @bind="newContent"></textarea>
+
+                <button class="btn btn-primary kn-create-btn" @onclick="AddKnowledgeItemAsync" disabled="@isSaving">Add
+                    Item</button>
+                </section>
+
+                <section class="kn-panel kn-list">
+                    <div class="kn-list-head">
+                        <h2>Your Knowledge Items</h2>
+                        <div class="kn-pager">
+                            <button class="btn btn-outline-secondary btn-sm" @onclick="PreviousPageAsync"
+                                    disabled="@(pageNumber <= 1)">Previous</button>
+                            <button class="btn btn-outline-secondary btn-sm" @onclick="NextPageAsync"
+                                    disabled="@(pageNumber >= totalPages)">Next</button>
+                        </div>
+                    </div>
+
+                    <p class="kn-meta">Page @pageNumber of @totalPages (@totalItems total items)</p>
+
+                    @if (!string.IsNullOrWhiteSpace(statusMessage))
+                    {
+                        <div class="alert alert-success" role="alert">@statusMessage</div>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(errorMessage))
+                    {
+                        <div class="alert alert-danger" role="alert">@errorMessage</div>
+                    }
+
+                    @if (items.Count == 0)
+                    {
+                        <p class="kn-empty">No knowledge items yet.</p>
+                    }
+                    else
+                    {
+                        <div class="kn-items">
+                            @foreach (var item in items)
+                            {
+                                <article class="kn-item">
+                                    <header>
+                                        <strong>@item.Title</strong>
+                                        <span class="badge @(item.IsEnabled ? "text-bg-success" : "text-bg-secondary")">
+                                            @(item.IsEnabled ? "Enabled" : "Disabled")
+                                        </span>
+                                    </header>
+                                    <p class="kn-category">Category: @item.Category</p>
+                                    <pre class="kn-pre">@item.Content</pre>
+                                    <div class="kn-actions">
+                                        <button class="btn btn-outline-primary btn-sm" @onclick="() => ToggleEnabledAsync(item.Id)">
+                                            @(item.IsEnabled ? "Disable" : "Enable")
+                                        </button>
+                                        <button class="btn btn-outline-danger btn-sm"
+                                                @onclick="() => DeleteItemAsync(item.Id)">Delete</button>
+                                    </div>
+                                </article>
+                            }
+                        </div>
+                    }
+                </section>
+            </div>
+        }
+    </div>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    private const int PageSize = 10;
+    private readonly List<UserKnowledgeItem> items = [];
+
+    private bool isLoading = true;
+    private bool isSaving;
+    private int pageNumber = 1;
+    private int totalItems;
+    private string newCategory = string.Empty;
+    private string newTitle = string.Empty;
+    private string newContent = string.Empty;
+    private string statusMessage = string.Empty;
+    private string errorMessage = string.Empty;
+
+    private int totalPages => Math.Max(1, (int)Math.Ceiling(totalItems / (double)PageSize));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            isLoading = false;
+            return;
+        }
+
+        await LoadKnowledgeItemsAsync(userId);
+        isLoading = false;
+    }
+
+    private async Task AddKnowledgeItemAsync()
+    {
+        statusMessage = string.Empty;
+        errorMessage = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(newCategory) || string.IsNullOrWhiteSpace(newTitle) ||
+string.IsNullOrWhiteSpace(newContent))
+        {
+            errorMessage = "Category, title, and content are required.";
+            return;
+        }
+
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        isSaving = true;
+
+        try
+        {
+            await KnowledgeService.AddKnowledgeItemAsync(userId, newCategory, newTitle, newContent);
+
+            newCategory = string.Empty;
+            newTitle = string.Empty;
+            newContent = string.Empty;
+            statusMessage = "Knowledge item added.";
+
+            pageNumber = 1;
+            await LoadKnowledgeItemsAsync(userId);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to add item: {ex.Message}";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task ToggleEnabledAsync(int itemId)
+    {
+        statusMessage = string.Empty;
+        errorMessage = string.Empty;
+
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        var updated = await KnowledgeService.ToggleKnowledgeItemAsync(userId, itemId);
+        if (!updated)
+        {
+            errorMessage = "Knowledge item was not found for the current user.";
+            return;
+        }
+
+        statusMessage = "Knowledge item updated.";
+        await LoadKnowledgeItemsAsync(userId);
+    }
+
+    private async Task DeleteItemAsync(int itemId)
+    {
+        statusMessage = string.Empty;
+        errorMessage = string.Empty;
+
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        var deleted = await KnowledgeService.DeleteKnowledgeItemAsync(userId, itemId);
+        if (!deleted)
+        {
+            errorMessage = "Knowledge item was not found for the current user.";
+            return;
+        }
+
+        statusMessage = "Knowledge item deleted.";
+
+        if ((pageNumber - 1) * PageSize >= Math.Max(0, totalItems - 1) && pageNumber > 1)
+        {
+            pageNumber--;
+        }
+
+        await LoadKnowledgeItemsAsync(userId);
+    }
+
+    private async Task PreviousPageAsync()
+    {
+        if (pageNumber <= 1)
+        {
+            return;
+        }
+
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        pageNumber--;
+        await LoadKnowledgeItemsAsync(userId);
+    }
+
+    private async Task NextPageAsync()
+    {
+        if (pageNumber >= totalPages)
+        {
+            return;
+        }
+
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        pageNumber++;
+        await LoadKnowledgeItemsAsync(userId);
+    }
+
+    private async Task LoadKnowledgeItemsAsync(string userId)
+    {
+        var page = await KnowledgeService.GetUserKnowledgeItemsAsync(userId, pageNumber, PageSize);
+
+        totalItems = page.TotalCount;
+        pageNumber = page.PageNumber;
+
+        if (pageNumber > page.TotalPages)
+        {
+            pageNumber = page.TotalPages;
+        }
+
+        items.Clear();
+        items.AddRange(page.Items);
+    }
+
+    private async Task<string?> GetCurrentUserIdAsync()
+    {
+        var authenticationState = AuthenticationStateTask is null ? null : await AuthenticationStateTask;
+        return authenticationState?.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    }
+}

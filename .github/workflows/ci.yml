@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore GwsWorkforce.Web.csproj
+
+      - name: Build (warnings as errors)
+        run: dotnet build GwsWorkforce.Web.csproj -c Release --no-restore -warnaserror
+
+      - name: Test discovery and execution
+        run: |
+          if find . -name "*.Tests.csproj" | grep -q .; then
+            dotnet test -c Release --no-build
+          else
+            echo "No test projects found yet."
+          fi
+
+      - name: Install EF tool
+        run: dotnet tool install --global dotnet-ef
+
+      - name: Migration safety check
+        env:
+          PATH: ${{ env.PATH }}:/home/runner/.dotnet/tools
+        run: |
+          rm -f Data/app.db
+          dotnet ef database update

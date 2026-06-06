@@ -1,0 +1,399 @@
+@page "/workforce"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using GwsWorkforce.Web.Application.Contracts
+@using GwsWorkforce.Web.Models.Workforce
+@using GwsWorkforce.Web.Services.Ollama
+@using Microsoft.AspNetCore.Authorization
+
+@inject IWorkerCatalogService WorkerCatalogService
+@inject IConversationService ConversationService
+@inject IChatOrchestrationService ChatOrchestrationService
+
+<PageTitle>GWS Workforce</PageTitle>
+
+<div class="wf-page">
+    <header class="wf-header">
+        <p class="wf-eyebrow">GWS Workforce</p>
+        <h1>AI Worker Console</h1>
+        <p class="wf-subtitle">Private, user-scoped conversations powered by local Ollama workers.</p>
+    </header>
+
+    @if (isLoading)
+    {
+        <div class="wf-loading">Loading workforce data...</div>
+    }
+    else
+    {
+        <div class="wf-layout">
+            <aside class="wf-sidebar">
+                <section class="wf-panel">
+                    <h2>Worker</h2>
+                    <label for="workerSelect" class="wf-label">Select worker</label>
+                    <select id="workerSelect" class="form-select" @bind="selectedWorkerId">
+                        @foreach (var worker in workers)
+                        {
+                            <option value="@worker.Id">@worker.DisplayName (@worker.ModelName)</option>
+                        }
+                    </select>
+                </section>
+
+                <section class="wf-panel">
+                    <h2>Conversations</h2>
+                    <label for="conversationSelect" class="wf-label">Your conversations</label>
+                    <select id="conversationSelect" class="form-select" value="@selectedConversationIdString" @onchange="HandleConversationChangedAsync">
+                        <option value="">Start new conversation</option>
+                        @foreach (var conversation in conversations)
+                        {
+                            <option value="@conversation.Id.ToString()">@conversation.Title</option>
+                        }
+                    </select>
+
+                    <div class="wf-pager">
+                        <button class="btn btn-outline-secondary btn-sm" @onclick="PreviousConversationPageAsync" disabled="@(conversationPageNumber <= 1)">Previous</button>
+                        <button class="btn btn-outline-secondary btn-sm" @onclick="NextConversationPageAsync" disabled="@(conversationPageNumber >= conversationTotalPages)">Next</button>
+                    </div>
+                    <p class="wf-meta">Page @conversationPageNumber of @conversationTotalPages (@totalConversationCount conversations)</p>
+                </section>
+
+                @if (selectedConversationId.HasValue)
+                {
+                    <section class="wf-panel">
+                        <h2>Manage</h2>
+                        <label for="renameTitle" class="wf-label">Rename title</label>
+                        <input id="renameTitle" class="form-control" @bind="renameTitle" />
+                        <div class="wf-actions">
+                            <button class="btn btn-outline-primary btn-sm" @onclick="RenameConversationAsync">Rename</button>
+                            <button class="btn btn-outline-danger btn-sm" @onclick="DeleteConversationAsync">Delete</button>
+                        </div>
+                    </section>
+                }
+            </aside>
+
+            <main class="wf-main">
+                <section class="wf-panel wf-composer">
+                    <h2>Prompt</h2>
+                    <textarea id="promptInput" class="form-control" rows="6" @bind="prompt" placeholder="Ask your selected worker..."></textarea>
+                    <div class="wf-send-row">
+                        <button class="btn btn-primary" @onclick="SendPromptAsync" disabled="@isSubmitting">
+                            @(isSubmitting ? "Sending..." : "Send")
+                        </button>
+                    </div>
+                </section>
+
+                @if (!string.IsNullOrWhiteSpace(errorMessage))
+                {
+                    <div class="alert alert-danger" role="alert">@errorMessage</div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(lastAssistantResponse))
+                {
+                    <section class="wf-panel">
+                        <h2>Assistant Response</h2>
+                        <pre class="wf-pre">@lastAssistantResponse</pre>
+                    </section>
+                }
+
+                @if (activeMessages.Count > 0)
+                {
+                    <section class="wf-panel">
+                        <h2>Conversation Messages</h2>
+                        <div class="wf-thread">
+                            @foreach (var message in activeMessages)
+                            {
+                                <article class="wf-msg">
+                                    <header>@message.Role</header>
+                                    <pre class="wf-pre">@message.Content</pre>
+                                </article>
+                            }
+                        </div>
+                    </section>
+                }
+            </main>
+        </div>
+    }
+</div>
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    private const int ConversationPageSize = 10;
+
+    private readonly List<WorkerDefinition> workers = [];
+    private readonly List<Conversation> conversations = [];
+    private readonly List<ConversationMessage> activeMessages = [];
+
+    private int selectedWorkerId;
+    private int? selectedConversationId;
+    private string selectedConversationIdString = string.Empty;
+    private string renameTitle = string.Empty;
+    private string prompt = string.Empty;
+    private string lastAssistantResponse = string.Empty;
+    private string errorMessage = string.Empty;
+    private bool isLoading = true;
+    private bool isSubmitting;
+    private int conversationPageNumber = 1;
+    private int totalConversationCount;
+
+    private int conversationTotalPages => Math.Max(1, (int)Math.Ceiling(totalConversationCount / (double)ConversationPageSize));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            isLoading = false;
+            return;
+        }
+
+        await LoadWorkersAsync();
+        await LoadConversationsAsync(userId);
+
+        if (workers.Count > 0)
+        {
+            selectedWorkerId = workers[0].Id;
+        }
+
+        isLoading = false;
+    }
+
+    private async Task HandleConversationChangedAsync(ChangeEventArgs args)
+    {
+        selectedConversationIdString = args.Value?.ToString() ?? string.Empty;
+
+        if (!int.TryParse(selectedConversationIdString, out var conversationId))
+        {
+            selectedConversationId = null;
+            renameTitle = string.Empty;
+            activeMessages.Clear();
+            lastAssistantResponse = string.Empty;
+            return;
+        }
+
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        selectedConversationId = conversationId;
+        var selected = conversations.FirstOrDefault(x => x.Id == conversationId);
+        renameTitle = selected?.Title ?? string.Empty;
+
+        await LoadActiveConversationAsync(userId, conversationId);
+    }
+
+    private async Task SendPromptAsync()
+    {
+        errorMessage = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            errorMessage = "Prompt is required.";
+            return;
+        }
+
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        if (workers.All(x => x.Id != selectedWorkerId))
+        {
+            errorMessage = "Please select a worker.";
+            return;
+        }
+
+        isSubmitting = true;
+
+        try
+        {
+            var result = await ChatOrchestrationService.SendPromptAsync(
+                userId,
+                selectedWorkerId,
+                prompt,
+                selectedConversationId);
+
+            lastAssistantResponse = result.AssistantResponse;
+            prompt = string.Empty;
+
+            selectedConversationId = result.ConversationId;
+            selectedConversationIdString = result.ConversationId.ToString();
+            renameTitle = result.ConversationTitle;
+
+            conversationPageNumber = 1;
+            await LoadConversationsAsync(userId);
+            await LoadActiveConversationAsync(userId, result.ConversationId);
+        }
+        catch (OllamaChatException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (InvalidOperationException ex)
+        {
+            errorMessage = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to send prompt: {ex.Message}";
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+
+    private async Task LoadWorkersAsync()
+    {
+        workers.Clear();
+        workers.AddRange(await WorkerCatalogService.GetEnabledWorkersAsync());
+    }
+
+    private async Task LoadConversationsAsync(string userId)
+    {
+        conversations.Clear();
+
+        var paged = await ConversationService.GetUserConversationsAsync(userId, conversationPageNumber, ConversationPageSize);
+        totalConversationCount = paged.TotalCount;
+        conversationPageNumber = paged.PageNumber;
+
+        if (conversationPageNumber > paged.TotalPages)
+        {
+            conversationPageNumber = paged.TotalPages;
+        }
+
+        conversations.AddRange(paged.Items);
+    }
+
+    private async Task LoadActiveConversationAsync(string userId, int conversationId)
+    {
+        activeMessages.Clear();
+
+        var messages = await ConversationService.GetConversationMessagesAsync(userId, conversationId);
+        if (messages is null)
+        {
+            errorMessage = "Conversation not found for current user.";
+            selectedConversationId = null;
+            selectedConversationIdString = string.Empty;
+            renameTitle = string.Empty;
+            return;
+        }
+
+        activeMessages.AddRange(messages);
+    }
+
+    private async Task PreviousConversationPageAsync()
+    {
+        if (conversationPageNumber <= 1)
+        {
+            return;
+        }
+
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        conversationPageNumber--;
+        await LoadConversationsAsync(userId);
+    }
+
+    private async Task NextConversationPageAsync()
+    {
+        if (conversationPageNumber >= conversationTotalPages)
+        {
+            return;
+        }
+
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        conversationPageNumber++;
+        await LoadConversationsAsync(userId);
+    }
+
+    private async Task RenameConversationAsync()
+    {
+        errorMessage = string.Empty;
+
+        if (!selectedConversationId.HasValue)
+        {
+            errorMessage = "Select a conversation to rename.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(renameTitle))
+        {
+            errorMessage = "Conversation title cannot be empty.";
+            return;
+        }
+
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        var renamed = await ConversationService.RenameConversationAsync(userId, selectedConversationId.Value, renameTitle);
+        if (!renamed)
+        {
+            errorMessage = "Conversation was not found for the current user.";
+            return;
+        }
+
+        await LoadConversationsAsync(userId);
+    }
+
+    private async Task DeleteConversationAsync()
+    {
+        errorMessage = string.Empty;
+
+        if (!selectedConversationId.HasValue)
+        {
+            errorMessage = "Select a conversation to delete.";
+            return;
+        }
+
+        var userId = await GetCurrentUserIdAsync();
+        if (userId is null)
+        {
+            errorMessage = "Unable to determine the current user.";
+            return;
+        }
+
+        var deleted = await ConversationService.DeleteConversationAsync(userId, selectedConversationId.Value);
+        if (!deleted)
+        {
+            errorMessage = "Conversation was not found for the current user.";
+            return;
+        }
+
+        selectedConversationId = null;
+        selectedConversationIdString = string.Empty;
+        renameTitle = string.Empty;
+        lastAssistantResponse = string.Empty;
+        activeMessages.Clear();
+
+        await LoadConversationsAsync(userId);
+    }
+
+    private async Task<string?> GetCurrentUserIdAsync()
+    {
+        var authenticationState = AuthenticationStateTask is null ? null : await AuthenticationStateTask;
+        return authenticationState?.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    }
+}
