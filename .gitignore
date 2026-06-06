@@ -1,12 +1,29 @@
 # Build output
 bin/
 obj/
+out/
+artifacts/
+
+# .NET local tools and generated files
+.config/dotnet-tools.json.user
+project.lock.json
+project.fragment.lock.json
+
+# ASP.NET Scaffolding
+ScaffoldingReadMe.txt
 
 # User-specific files
 *.user
 *.suo
 *.userosscache
 *.sln.docstates
+*.rsuser
+*.VC.db
+*.VC.VC.opendb
+*.opendb
+
+# Mono auto generated files
+mono_crash.*
 
 # VS Code
 .vscode/*
@@ -16,24 +33,46 @@ obj/
 !.vscode/extensions.json
 !.vscode/*.code-snippets
 
+# Visual Studio
+.vs/
+Generated\\ Files/
+
+# Visual Studio profiler
+*.psess
+*.vsp
+*.vspx
+
 # Rider / ReSharper
 .idea/
 *.sln.iml
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
 
 # Test output
 TestResults/
 *.trx
 *.coverage
 *.coveragexml
+coverage/
 
 # Logs and temp
 *.log
 *.tmp
+*.temp
+*.pid
+*.seed
 
 # OS files
 .DS_Store
+Thumbs.db
 
 # NuGet
 *.nupkg
 *.snupkg
 packages/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3

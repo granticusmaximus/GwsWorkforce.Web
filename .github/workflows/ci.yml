@@ -27,8 +27,12 @@ jobs:
 
       - name: Test discovery and execution
         run: |
-          if find . -name "*.Tests.csproj" | grep -q .; then
-            dotnet test -c Release --no-build
+          test_projects=$(find . -name "*.Tests.csproj")
+          if [ -n "$test_projects" ]; then
+            while IFS= read -r project; do
+              echo "Testing $project"
+              dotnet test "$project" -c Release
+            done <<< "$test_projects"
           else
             echo "No test projects found yet."
           fi
