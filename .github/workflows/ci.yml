@@ -14,6 +14,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Repository hygiene check
+        run: |
+          tracked_generated=$(git ls-files | grep -E '(^|/)bin/|(^|/)obj/|^TestResults/|\.trx$|\.coverage$|\.coveragexml$|\.db$|\.sqlite$|\.sqlite3$' || true)
+          if [ -n "$tracked_generated" ]; then
+            echo "Tracked generated/unnecessary files detected:"
+            echo "$tracked_generated"
+            echo "Please remove these from git tracking and rely on .gitignore."
+            exit 1
+          fi
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
