@@ -94,6 +94,66 @@ public class Phase2UiComponentTests : TestContext
         });
     }
 
+    [Fact]
+    public void Workforce_KeyboardTabReachableControls_AppearInExpectedFlow()
+    {
+        Services.AddScoped<IWorkerCatalogService>(_ => new FakeWorkerCatalogService());
+        Services.AddScoped<IConversationService>(_ => new FakeConversationService(totalConversations: 11));
+        Services.AddScoped<IChatOrchestrationService>(_ => new FakeChatOrchestrationService());
+        Services.AddScoped<AuthenticationStateProvider>(_ => BuildAuthProvider("user-a"));
+
+        var cut = RenderComponent<CascadingAuthenticationState>(parameters =>
+            parameters.AddChildContent<Workforce>());
+
+        cut.WaitForAssertion(() =>
+        {
+            var focusables = cut.FindAll(".wf-page select, .wf-page input, .wf-page textarea, .wf-page button");
+            Assert.NotEmpty(focusables);
+
+            var idsInOrder = focusables
+                .Select(x => x.GetAttribute("id"))
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .ToList();
+
+            Assert.True(idsInOrder.Count >= 3);
+            Assert.Equal("workerSelect", idsInOrder[0]);
+            Assert.Equal("conversationSelect", idsInOrder[1]);
+            Assert.Equal("promptInput", idsInOrder[2]);
+
+            Assert.Contains(focusables, x => x.TagName.Equals("BUTTON", StringComparison.OrdinalIgnoreCase) && x.TextContent.Contains("Send", StringComparison.Ordinal));
+            Assert.DoesNotContain(focusables, x => string.Equals(x.GetAttribute("tabindex"), "-1", StringComparison.Ordinal));
+        });
+    }
+
+    [Fact]
+    public void Knowledge_KeyboardTabReachableControls_AppearInExpectedFlow()
+    {
+        Services.AddScoped<IKnowledgeService>(_ => new FakeKnowledgeService());
+        Services.AddScoped<AuthenticationStateProvider>(_ => BuildAuthProvider("user-a"));
+
+        var cut = RenderComponent<CascadingAuthenticationState>(parameters =>
+            parameters.AddChildContent<Knowledge>());
+
+        cut.WaitForAssertion(() =>
+        {
+            var focusables = cut.FindAll(".kn-page select, .kn-page input, .kn-page textarea, .kn-page button");
+            Assert.NotEmpty(focusables);
+
+            var idsInOrder = focusables
+                .Select(x => x.GetAttribute("id"))
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .ToList();
+
+            Assert.True(idsInOrder.Count >= 3);
+            Assert.Equal("knowledgeCategory", idsInOrder[0]);
+            Assert.Equal("knowledgeTitle", idsInOrder[1]);
+            Assert.Equal("knowledgeContent", idsInOrder[2]);
+
+            Assert.Contains(focusables, x => x.TagName.Equals("BUTTON", StringComparison.OrdinalIgnoreCase) && x.TextContent.Contains("Add", StringComparison.Ordinal));
+            Assert.DoesNotContain(focusables, x => string.Equals(x.GetAttribute("tabindex"), "-1", StringComparison.Ordinal));
+        });
+    }
+
     private static AuthenticationStateProvider BuildAuthProvider(string userId)
     {
         var identity = new ClaimsIdentity(
