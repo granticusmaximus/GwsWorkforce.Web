@@ -27,6 +27,62 @@ public sealed class ConversationService(ApplicationDbContext dbContext) : IConve
         return new PagedResult<Conversation>(items, normalizedPage, normalizedSize, totalCount);
     }
 
+    public async Task<int> EnsureProjectAnchorConversationAsync(string applicationUserId, string projectName, CancellationToken cancellationToken = default)
+    {
+        var normalizedProjectName = projectName.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedProjectName))
+        {
+            throw new InvalidOperationException("Project name is required.");
+        }
+
+        var titlePrefix = ProjectNaming.BuildConversationTitle(normalizedProjectName, string.Empty);
+        var existingId = await dbContext.Conversations
+            .Where(x => x.ApplicationUserId == applicationUserId)
+            .Where(x => EF.Functions.Like(x.Title, titlePrefix + "%"))
+            .OrderByDescending(x => x.UpdatedAtUtc ?? x.CreatedAtUtc)
+            .Select(x => x.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (existingId != 0)
+        {
+            return existingId;
+        }
+
+        var fallbackWorkerId = await dbContext.WorkerDefinitions
+            .Where(x => x.IsEnabled)
+            .OrderBy(x => x.Id)
+            .Select(x => x.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (fallbackWorkerId == 0)
+        {
+            fallbackWorkerId = await dbContext.WorkerDefinitions
+                .OrderBy(x => x.Id)
+                .Select(x => x.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+        }
+
+        if (fallbackWorkerId == 0)
+        {
+            throw new InvalidOperationException("No workers are configured. Configure at least one worker before creating projects.");
+        }
+
+        var now = DateTime.UtcNow;
+        var anchor = new Conversation
+        {
+            ApplicationUserId = applicationUserId,
+            WorkerDefinitionId = fallbackWorkerId,
+            Title = ProjectNaming.BuildConversationTitle(normalizedProjectName, "Pending"),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now
+        };
+
+        dbContext.Conversations.Add(anchor);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return anchor.Id;
+    }
+
     public async Task<IReadOnlyList<ConversationMessage>?> GetConversationMessagesAsync(string applicationUserId, int conversationId, CancellationToken cancellationToken = default)
     {
         var conversationExists = await dbContext.Conversations

@@ -33,6 +33,7 @@ builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 builder.Services.AddHttpClient<OllamaChatService>(client =>
 {
     client.BaseAddress = new Uri("http://localhost:11434");
+    client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
 });
 builder.Services.AddScoped<IWorkerCatalogService, WorkerCatalogService>();
 builder.Services.AddScoped<IConversationService, ConversationService>();

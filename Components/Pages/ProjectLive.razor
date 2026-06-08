@@ -68,15 +68,18 @@
     private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
 
     private readonly List<string> activityLines = [];
+    private string? currentUserId;
     private string projectName = string.Empty;
     private string collaborationPrompt = string.Empty;
     private string errorMessage = string.Empty;
     private bool isBusy;
+    private bool shouldRunInitialPrompt;
+    private bool hasStartedInitialRun;
 
     protected override async Task OnInitializedAsync()
     {
-        var userId = await GetCurrentUserIdAsync();
-        if (userId is null)
+        currentUserId = await GetCurrentUserIdAsync();
+        if (currentUserId is null)
         {
             errorMessage = "Unable to determine the current user.";
             return;
@@ -86,37 +89,55 @@
         collaborationPrompt = Goal?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(collaborationPrompt) && !string.IsNullOrWhiteSpace(Draft))
         {
-            collaborationPrompt = ProjectDraftStore.TakeDraft(userId, Draft) ?? string.Empty;
+            collaborationPrompt = ProjectDraftStore.TakeDraft(currentUserId, Draft) ?? string.Empty;
         }
 
-        if (!string.IsNullOrWhiteSpace(collaborationPrompt))
+        if (string.IsNullOrWhiteSpace(collaborationPrompt))
         {
-            await RunCollaborativeProjectAsync(userId, collaborationPrompt);
+            collaborationPrompt = ProjectDraftStore.GetProjectPrompt(currentUserId, projectName) ?? string.Empty;
         }
-        else
+
+        await LoadExistingActivityAsync(currentUserId);
+        shouldRunInitialPrompt = !string.IsNullOrWhiteSpace(collaborationPrompt);
+
+        if (!shouldRunInitialPrompt)
         {
             errorMessage = "No project prompt was received for this run. Return to Projects and start again.";
         }
+    }
 
-        await LoadExistingActivityAsync(userId);
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || hasStartedInitialRun || !shouldRunInitialPrompt || currentUserId is null)
+        {
+            return;
+        }
+
+        hasStartedInitialRun = true;
+        await RunCollaborativeProjectAsync(currentUserId, collaborationPrompt);
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task RunUpdatedPromptAsync()
     {
         errorMessage = string.Empty;
 
-        var userId = await GetCurrentUserIdAsync();
+        var userId = currentUserId ?? await GetCurrentUserIdAsync();
         if (userId is null)
         {
             errorMessage = "Unable to determine the current user.";
             return;
         }
 
+        currentUserId = userId;
+
         if (string.IsNullOrWhiteSpace(collaborationPrompt))
         {
             errorMessage = "Project prompt is required.";
             return;
         }
+
+        ProjectDraftStore.SetProjectPrompt(userId, projectName, collaborationPrompt.Trim());
 
         await RunCollaborativeProjectAsync(userId, collaborationPrompt.Trim());
     }
@@ -137,22 +158,25 @@
         try
         {
             activityLines.Add($"[{DateTime.Now:T}] Using {workers.Count} chat-capable workers for this run.");
-            var kickoffPrompt = BuildProjectKickoffPrompt(projectName, goal);
-            var tasks = workers
-                .Select(worker => TryStartWorkerTrackAsync(userId, worker, kickoffPrompt))
+            activityLines.Add($"[{DateTime.Now:T}] Stage 1/4: Concurrent planning started.");
+            StateHasChanged();
+
+            var planningPrompt = BuildConcurrentPlanningPrompt(projectName, goal);
+            var planningTasks = workers
+                .Select(worker => TryRunWorkerTrackAsync(userId, worker, planningPrompt, "Plan"))
                 .ToList();
 
-            var completed = new List<WorkerTrack>();
-            while (tasks.Count > 0)
+            var planningCompleted = new List<WorkerTrack>();
+            while (planningTasks.Count > 0)
             {
-                var completedTask = await Task.WhenAny(tasks);
-                tasks.Remove(completedTask);
+                var completedTask = await Task.WhenAny(planningTasks);
+                planningTasks.Remove(completedTask);
                 var result = await completedTask;
 
                 if (result.IsSuccess)
                 {
-                    completed.Add(result);
-                    activityLines.Add($"[{DateTime.Now:T}] {result.WorkerName} completed contribution.");
+                    planningCompleted.Add(result);
+                    activityLines.Add($"[{DateTime.Now:T}] {result.WorkerName} submitted planning output.");
                 }
                 else
                 {
@@ -162,7 +186,7 @@
                 StateHasChanged();
             }
 
-            if (completed.Count == 0)
+            if (planningCompleted.Count == 0)
             {
                 var firstFailure = activityLines.LastOrDefault(x => x.Contains(" failed:", StringComparison.OrdinalIgnoreCase));
                 errorMessage = string.IsNullOrWhiteSpace(firstFailure)
@@ -171,11 +195,68 @@
                 return;
             }
 
-            var coordinator = SelectCoordinator(workers, completed);
-            activityLines.Add($"[{DateTime.Now:T}] Running collective synthesis via {coordinator.DisplayName}.");
+            var coordinator = SelectCoordinator(workers, planningCompleted);
+            activityLines.Add($"[{DateTime.Now:T}] Stage 2/4: {coordinator.DisplayName} is building a shared execution plan.");
             StateHasChanged();
 
-            var synthesisPrompt = BuildCollectiveSynthesisPrompt(projectName, goal, completed);
+            var sharedPlanPrompt = BuildSharedExecutionPlanPrompt(projectName, goal, planningCompleted);
+            var sharedPlanResult = await ChatOrchestrationService.SendPromptAsync(userId, coordinator.Id, sharedPlanPrompt,
+                selectedConversationId: null);
+
+            await ConversationService.RenameConversationAsync(userId, sharedPlanResult.ConversationId,
+                ProjectNaming.BuildConversationTitle(projectName, "Coordinator Plan"));
+
+            activityLines.Add($"[{DateTime.Now:T}] Shared execution plan complete.");
+            activityLines.Add($"[{DateTime.Now:T}] Stage 3/4: Sequential handoff execution started.");
+            StateHasChanged();
+
+            var executionOrder = OrderWorkersForExecution(workers, planningCompleted);
+            var executionTracks = new List<WorkerTrack>();
+            var handoffTrail = string.Empty;
+
+            for (var index = 0; index < executionOrder.Count; index++)
+            {
+                var worker = executionOrder[index];
+                var executionPrompt = BuildSequentialExecutionPrompt(
+                    projectName,
+                    goal,
+                    sharedPlanResult.AssistantResponse,
+                    handoffTrail,
+                    worker,
+                    index + 1,
+                    executionOrder.Count);
+
+                var executionTrack = await TryRunWorkerTrackAsync(userId, worker, executionPrompt, $"Execute {index + 1}");
+
+                if (executionTrack.IsSuccess)
+                {
+                    executionTracks.Add(executionTrack);
+                    activityLines.Add($"[{DateTime.Now:T}] {executionTrack.WorkerName} completed sequential step {index +
+1}/{executionOrder.Count}.");
+
+                    var contributionSnippet = TruncateForPrompt(executionTrack.Response, 1200);
+                    handoffTrail += $"\n\nStep {index + 1} - {executionTrack.WorkerName}:\n{contributionSnippet}";
+                }
+                else
+                {
+                    activityLines.Add($"[{DateTime.Now:T}] {executionTrack.WorkerName} sequential step failed: {executionTrack.ErrorReason}");
+                    handoffTrail += $"\n\nStep {index + 1} - {executionTrack.WorkerName}: FAILED ({executionTrack.ErrorReason})";
+                }
+
+                StateHasChanged();
+            }
+
+            activityLines.Add($"[{DateTime.Now:T}] Stage 4/4: Final collective synthesis via {coordinator.DisplayName}.");
+            StateHasChanged();
+
+            var synthesisPrompt = BuildCollectiveSynthesisPrompt(
+                projectName,
+                goal,
+                planningCompleted,
+                sharedPlanResult.AssistantResponse,
+                executionTracks,
+                handoffTrail);
+
             var collectiveResult = await ChatOrchestrationService.SendPromptAsync(userId, coordinator.Id, synthesisPrompt,
 selectedConversationId: null);
 
@@ -202,14 +283,15 @@ ProjectNaming.BuildConversationTitle(projectName, "Collective"));
         }
     }
 
-    private async Task<WorkerTrack> TryStartWorkerTrackAsync(string userId, WorkerDefinition worker, string kickoffPrompt)
+    private async Task<WorkerTrack> TryRunWorkerTrackAsync(string userId, WorkerDefinition worker, string prompt, string
+trackName)
     {
         try
         {
-            var result = await ChatOrchestrationService.SendPromptAsync(userId, worker.Id, kickoffPrompt, selectedConversationId:
+            var result = await ChatOrchestrationService.SendPromptAsync(userId, worker.Id, prompt, selectedConversationId:
 null);
             await ConversationService.RenameConversationAsync(userId, result.ConversationId,
-ProjectNaming.BuildConversationTitle(projectName, worker.DisplayName));
+ProjectNaming.BuildConversationTitle(projectName, $"{worker.DisplayName} {trackName}"));
             return new WorkerTrack(worker.Id, worker.DisplayName, result.AssistantResponse, true, null);
         }
         catch (Exception ex)
@@ -237,10 +319,6 @@ ProjectNaming.BuildConversationTitle(projectName, worker.DisplayName));
             }
         }
 
-        if (activityLines.Count > 0)
-        {
-            activityLines.Sort(StringComparer.Ordinal);
-        }
     }
 
     private async Task<IReadOnlyList<Conversation>> LoadProjectConversationsAsync(string userId)
@@ -282,19 +360,78 @@ IReadOnlyList<WorkerTrack> successfulTracks)
                ?? successfulWorkers[0];
     }
 
-    private static string BuildProjectKickoffPrompt(string project, string goal)
+    private static string BuildConcurrentPlanningPrompt(string project, string goal)
     {
-        return $"Project: {project}\nGoal: {goal}\n\nWork this as a team contributor. Provide:\n1. Your strongest approach\n2. Risks you see\n3. Dependencies\n4. Concrete next actions";
+        return $"Project: {project}\nGoal: {goal}\n\nYou are a specialist contributor in a multi-model team. Work in parallel with other contributors. Provide concise output with:\n1. Work breakdown proposal\n2. Risks and blockers\n3. Dependencies on other contributors\n4. Concrete deliverables you can own in execution";
     }
 
-    private static string BuildCollectiveSynthesisPrompt(string project, string goal, IReadOnlyList<WorkerTrack> tracks)
+    private static string BuildSharedExecutionPlanPrompt(string project, string goal, IReadOnlyList<WorkerTrack>
+planningTracks)
     {
         var workerContributions = string.Join(
             "\n\n",
-            tracks.Select(track =>
+            planningTracks.Select(track =>
                 $"Contributor: {track.WorkerName}\nResponse:\n{track.Response}"));
 
-        return $"Project: {project}\nGoal: {goal}\n\nThe following contributors worked in parallel:\n\n{workerContributions}\n\nSynthesize one collective plan that integrates the best ideas across contributors. Include:\n1. Final recommended approach\n2. Combined phased plan\n3. Cross-contributor dependency map\n4. Immediate next 3 actions.";
+        return $"Project: {project}\nGoal: {goal}\n\nThe following contributors produced planning input in parallel:\n\n{workerContributions}\n\nCreate one shared execution plan for the team:\n1. Ordered phases\n2. Specific assignment per contributor\n3. Handoff sequence between contributors\n4. Definition of done for each phase\n\nKeep it concise and execution-ready.";
+    }
+
+    private static string BuildSequentialExecutionPrompt(
+        string project,
+        string goal,
+        string sharedPlan,
+        string handoffTrail,
+        WorkerDefinition worker,
+        int stepNumber,
+        int totalSteps)
+    {
+        var trimmedTrail = TruncateForPrompt(handoffTrail, 2400);
+        return $"Project: {project}\nGoal: {goal}\n\nShared Execution Plan:\n{TruncateForPrompt(sharedPlan, 2400)}\n\nCurrent Step: {stepNumber} of {totalSteps}\nCurrent Contributor: {worker.DisplayName} ({worker.Key})\n\nPrior Handoff Context:\n{(string.IsNullOrWhiteSpace(trimmedTrail) ? "No prior steps." : trimmedTrail)}\n\nExecute your assigned step now and produce:\n1. What you completed\n2. Artifacts or decisions created\n3. Risks discovered\n4. Handoff instructions for the next contributor\n\nBe concrete and concise.";
+    }
+
+    private static string BuildCollectiveSynthesisPrompt(
+        string project,
+        string goal,
+        IReadOnlyList<WorkerTrack> planningTracks,
+        string sharedPlan,
+        IReadOnlyList<WorkerTrack> executionTracks,
+        string handoffTrail)
+    {
+        var planningContributions = string.Join(
+            "\n\n",
+            planningTracks.Select(track =>
+                $"Planning Contributor: {track.WorkerName}\nResponse:\n{TruncateForPrompt(track.Response, 1200)}"));
+
+        var executionContributions = string.Join(
+            "\n\n",
+            executionTracks.Select(track =>
+                $"Execution Contributor: {track.WorkerName}\nResponse:\n{TruncateForPrompt(track.Response, 1200)}"));
+
+        return $"Project: {project}\nGoal: {goal}\n\nShared plan produced by coordinator:\n{TruncateForPrompt(sharedPlan,
+1800)}\n\nParallel planning contributions:\n{planningContributions}\n\nSequential execution outcomes:\n{executionContributions}\n\nExecution handoff trail:\n{TruncateForPrompt(handoffTrail, 2000)}\n\nProvide a final collective output with:\n1. Final integrated plan\n2. What was completed vs pending\n3. Critical risks and mitigations\n4. Immediate next 3 actions";
+    }
+
+    private static List<WorkerDefinition> OrderWorkersForExecution(
+        IReadOnlyList<WorkerDefinition> availableWorkers,
+        IReadOnlyList<WorkerTrack> planningTracks)
+    {
+        var successfulIds = planningTracks.Select(x => x.WorkerId).ToHashSet();
+        var successfulWorkers = availableWorkers
+            .Where(x => successfulIds.Contains(x.Id))
+            .OrderBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return successfulWorkers;
+    }
+
+    private static string TruncateForPrompt(string value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length <= maxLength)
+        {
+            return value;
+        }
+
+        return value[..maxLength] + "\n[truncated]";
     }
 
     private void OpenProjectChats()

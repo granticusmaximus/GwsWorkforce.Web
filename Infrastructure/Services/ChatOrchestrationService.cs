@@ -146,12 +146,49 @@ public sealed class ChatOrchestrationService(
 
     private static string CreateConversationTitle(string text)
     {
+        if (TryExtractProjectNameFromPrompt(text, out var projectName))
+        {
+            return ProjectNaming.BuildConversationTitle(projectName!, "Pending");
+        }
+
         if (text.Length <= 80)
         {
             return text;
         }
 
         return $"{text[..80]}...";
+    }
+
+    private static bool TryExtractProjectNameFromPrompt(string text, out string? projectName)
+    {
+        projectName = null;
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length == 0)
+        {
+            return false;
+        }
+
+        const string prefix = "Project:";
+        var first = lines[0];
+        if (!first.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var extracted = first[prefix.Length..].Trim();
+        if (string.IsNullOrWhiteSpace(extracted))
+        {
+            return false;
+        }
+
+        projectName = extracted;
+        return true;
     }
 
     private static string BuildGovernedSystemPrompt(string systemPrompt)

@@ -4,9 +4,12 @@ using System.Text.Json.Serialization;
 
 namespace GwsWorkforce.Web.Services.Ollama;
 
-public sealed class OllamaChatService(HttpClient httpClient)
+public sealed class OllamaChatService(HttpClient httpClient, IConfiguration configuration)
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan MaxTimeout = TimeSpan.FromMinutes(10);
+    private readonly TimeSpan requestTimeout = ResolveRequestTimeout(configuration);
+    private readonly int timeoutRetries = ResolveTimeoutRetries(configuration);
 
     public async Task<string> ChatAsync(
         string modelName,
@@ -33,38 +36,72 @@ public sealed class OllamaChatService(HttpClient httpClient)
 
         var request = new OllamaChatRequest(modelName, messages, false);
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(DefaultTimeout);
+        var maxAttempts = timeoutRetries + 1;
 
-        try
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            using var response = await httpClient.PostAsJsonAsync("/api/chat", request, timeoutCts.Token);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(requestTimeout);
 
-            if (!response.IsSuccessStatusCode)
+            try
             {
-                var body = await response.Content.ReadAsStringAsync(timeoutCts.Token);
-                throw new OllamaChatException(CreateFailureMessage(response.StatusCode, modelName, body));
+                using var response = await httpClient.PostAsJsonAsync("/api/chat", request, timeoutCts.Token);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync(timeoutCts.Token);
+                    throw new OllamaChatException(CreateFailureMessage(response.StatusCode, modelName, body));
+                }
+
+                var payload = await response.Content.ReadFromJsonAsync<OllamaChatResponse>(cancellationToken: timeoutCts.Token);
+                var content = payload?.Message?.Content;
+
+                return string.IsNullOrWhiteSpace(content)
+                    ? "No response was returned from Ollama."
+                    : content.Trim();
             }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested && attempt < maxAttempts)
+            {
+                continue;
+            }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new OllamaChatException($"Ollama timed out after {maxAttempts} attempt(s) with a {requestTimeout.TotalSeconds:F0}s timeout per attempt. Try a shorter prompt, switch workers, or increase Ollama:ChatTimeoutSeconds.");
+            }
+            catch (HttpRequestException)
+            {
+                throw new OllamaChatException("Unable to reach Ollama at http://localhost:11434. Make sure Ollama is running locally.");
+            }
+            catch (JsonException)
+            {
+                throw new OllamaChatException("Ollama returned an unexpected response format. Try again, or check the Ollama logs.");
+            }
+        }
 
-            var payload = await response.Content.ReadFromJsonAsync<OllamaChatResponse>(cancellationToken: timeoutCts.Token);
-            var content = payload?.Message?.Content;
+        throw new OllamaChatException("Ollama request did not complete.");
+    }
 
-            return string.IsNullOrWhiteSpace(content)
-                ? "No response was returned from Ollama."
-                : content.Trim();
-        }
-        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+    private static TimeSpan ResolveRequestTimeout(IConfiguration configuration)
+    {
+        var configuredSeconds = configuration.GetValue<int?>("Ollama:ChatTimeoutSeconds");
+        if (!configuredSeconds.HasValue || configuredSeconds.Value <= 0)
         {
-            throw new OllamaChatException("Ollama timed out while generating a response. Try a shorter prompt, switch workers, or retry in a moment.");
+            return DefaultTimeout;
         }
-        catch (HttpRequestException)
+
+        var configured = TimeSpan.FromSeconds(configuredSeconds.Value);
+        return configured > MaxTimeout ? MaxTimeout : configured;
+    }
+
+    private static int ResolveTimeoutRetries(IConfiguration configuration)
+    {
+        var configuredRetries = configuration.GetValue<int?>("Ollama:ChatTimeoutRetries");
+        if (!configuredRetries.HasValue)
         {
-            throw new OllamaChatException("Unable to reach Ollama at http://localhost:11434. Make sure Ollama is running locally.");
+            return 1;
         }
-        catch (JsonException)
-        {
-            throw new OllamaChatException("Ollama returned an unexpected response format. Try again, or check the Ollama logs.");
-        }
+
+        return Math.Clamp(configuredRetries.Value, 0, 3);
     }
 
     private static string CreateFailureMessage(System.Net.HttpStatusCode statusCode, string modelName, string body)

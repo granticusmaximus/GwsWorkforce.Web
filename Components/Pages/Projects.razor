@@ -230,9 +230,19 @@
 
         try
         {
-            var projectKey = ProjectNaming.EncodeProjectKey(projectName);
-            var draftId = ProjectDraftStore.SetDraft(userId, projectGoal.Trim());
+            var trimmedProjectName = projectName.Trim();
+            var trimmedProjectGoal = projectGoal.Trim();
+
+            await ConversationService.EnsureProjectAnchorConversationAsync(userId, trimmedProjectName);
+            ProjectDraftStore.SetProjectPrompt(userId, trimmedProjectName, trimmedProjectGoal);
+
+            var projectKey = ProjectNaming.EncodeProjectKey(trimmedProjectName);
+            var draftId = ProjectDraftStore.SetDraft(userId, trimmedProjectGoal);
             NavigationManager.NavigateTo($"/projects/{projectKey}/live?draft={draftId}");
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Unable to start project: {ex.Message}";
         }
         finally
         {

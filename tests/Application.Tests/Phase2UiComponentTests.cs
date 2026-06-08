@@ -395,6 +395,9 @@ public class Phase2UiComponentTests : TestContext
             return Task.FromResult(new PagedResult<Conversation>(items, pageNumber, pageSize, totalConversations));
         }
 
+        public Task<int> EnsureProjectAnchorConversationAsync(string applicationUserId, string projectName, CancellationToken cancellationToken = default)
+            => Task.FromResult(1);
+
         public Task<IReadOnlyList<ConversationMessage>?> GetConversationMessagesAsync(string applicationUserId, int conversationId, CancellationToken cancellationToken = default)
         {
             IReadOnlyList<ConversationMessage> items =

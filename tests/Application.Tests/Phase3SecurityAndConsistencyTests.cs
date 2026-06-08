@@ -245,7 +245,9 @@ public class Phase3SecurityAndConsistencyTests
             BaseAddress = new Uri("http://localhost:11434")
         };
 
-        var ollamaService = new OllamaChatService(httpClient);
+        var ollamaService = new OllamaChatService(
+            httpClient,
+            BuildConfiguration(new Dictionary<string, string?>()));
         var orchestrationService = new ChatOrchestrationService(
             dbContext,
             ollamaService,
@@ -326,7 +328,9 @@ public class Phase3SecurityAndConsistencyTests
             BaseAddress = new Uri("http://localhost:11434")
         };
 
-        var ollamaService = new OllamaChatService(httpClient);
+        var ollamaService = new OllamaChatService(
+            httpClient,
+            BuildConfiguration(new Dictionary<string, string?>()));
         var orchestrationService = new ChatOrchestrationService(
             dbContext,
             ollamaService,
@@ -411,7 +415,9 @@ public class Phase3SecurityAndConsistencyTests
             BaseAddress = new Uri("http://localhost:11434")
         };
 
-        var ollamaService = new OllamaChatService(httpClient);
+        var ollamaService = new OllamaChatService(
+            httpClient,
+            BuildConfiguration(new Dictionary<string, string?>()));
         var orchestrationService = new ChatOrchestrationService(
             dbContext,
             ollamaService,
@@ -449,7 +455,9 @@ public class Phase3SecurityAndConsistencyTests
             BaseAddress = new Uri("http://localhost:11434")
         };
 
-        var service = new OllamaChatService(client);
+        var service = new OllamaChatService(
+            client,
+            BuildConfiguration(new Dictionary<string, string?>()));
 
         var ex = await Assert.ThrowsAsync<OllamaChatException>(() =>
             service.ChatAsync("x/z-image-turbo:latest", "sys", "user", null, CancellationToken.None));

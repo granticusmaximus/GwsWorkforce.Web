@@ -7,6 +7,8 @@ public interface IConversationService
 {
     Task<PagedResult<Conversation>> GetUserConversationsAsync(string applicationUserId, int pageNumber, int pageSize, CancellationToken cancellationToken = default);
 
+    Task<int> EnsureProjectAnchorConversationAsync(string applicationUserId, string projectName, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<ConversationMessage>?> GetConversationMessagesAsync(string applicationUserId, int conversationId, CancellationToken cancellationToken = default);
 
     Task<bool> RenameConversationAsync(string applicationUserId, int conversationId, string title, CancellationToken cancellationToken = default);
