@@ -3,8 +3,8 @@ namespace GwsWorkforce.Web.Services;
 public sealed class ProjectDraftStore
 {
     private readonly object sync = new();
-    private readonly Dictionary<string, ProjectDraft> drafts = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, ProjectPrompt> projectPrompts = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, ProjectDraft>? drafts = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, ProjectPrompt>? projectPrompts = new(StringComparer.OrdinalIgnoreCase);
 
     public string SetDraft(string applicationUserId, string prompt)
     {
@@ -13,8 +13,9 @@ public sealed class ProjectDraftStore
 
         lock (sync)
         {
+            EnsureStores_NoLock();
             CleanupExpiredDrafts_NoLock();
-            drafts[draftId] = new ProjectDraft(applicationUserId, prompt, expiresAtUtc);
+            drafts![draftId] = new ProjectDraft(applicationUserId, prompt, expiresAtUtc);
         }
 
         return draftId;
@@ -24,9 +25,10 @@ public sealed class ProjectDraftStore
     {
         lock (sync)
         {
+            EnsureStores_NoLock();
             CleanupExpiredDrafts_NoLock();
 
-            if (!drafts.TryGetValue(draftId, out var draft))
+            if (!drafts!.TryGetValue(draftId, out var draft))
             {
                 return null;
             }
@@ -55,8 +57,9 @@ public sealed class ProjectDraftStore
 
         lock (sync)
         {
+            EnsureStores_NoLock();
             CleanupExpiredProjectPrompts_NoLock();
-            projectPrompts[key] = new ProjectPrompt(normalizedPrompt, expiresAtUtc);
+            projectPrompts![key] = new ProjectPrompt(normalizedPrompt, expiresAtUtc);
         }
     }
 
@@ -72,9 +75,10 @@ public sealed class ProjectDraftStore
 
         lock (sync)
         {
+            EnsureStores_NoLock();
             CleanupExpiredProjectPrompts_NoLock();
 
-            if (!projectPrompts.TryGetValue(key, out var storedPrompt))
+            if (!projectPrompts!.TryGetValue(key, out var storedPrompt))
             {
                 return null;
             }
@@ -85,30 +89,40 @@ public sealed class ProjectDraftStore
 
     private void CleanupExpiredDrafts_NoLock()
     {
+        EnsureStores_NoLock();
+
         var now = DateTime.UtcNow;
-        var expiredKeys = drafts
+        var expiredKeys = drafts!
             .Where(x => x.Value.ExpiresAtUtc <= now)
             .Select(x => x.Key)
             .ToList();
 
         foreach (var key in expiredKeys)
         {
-            drafts.Remove(key);
+            drafts!.Remove(key);
         }
     }
 
     private void CleanupExpiredProjectPrompts_NoLock()
     {
+        EnsureStores_NoLock();
+
         var now = DateTime.UtcNow;
-        var expiredKeys = projectPrompts
+        var expiredKeys = projectPrompts!
             .Where(x => x.Value.ExpiresAtUtc <= now)
             .Select(x => x.Key)
             .ToList();
 
         foreach (var key in expiredKeys)
         {
-            projectPrompts.Remove(key);
+            projectPrompts!.Remove(key);
         }
+    }
+
+    private void EnsureStores_NoLock()
+    {
+        drafts ??= new Dictionary<string, ProjectDraft>(StringComparer.OrdinalIgnoreCase);
+        projectPrompts ??= new Dictionary<string, ProjectPrompt>(StringComparer.OrdinalIgnoreCase);
     }
 
     private static string BuildProjectPromptKey(string applicationUserId, string projectName)

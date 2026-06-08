@@ -3,7 +3,9 @@
 @rendermode InteractiveServer
 
 @using System.Security.Claims
+@using System.Threading
 @using GwsWorkforce.Web.Application.Contracts
+@using GwsWorkforce.Web.Application.Models
 @using GwsWorkforce.Web.Models.Workforce
 @using GwsWorkforce.Web.Services
 @using GwsWorkforce.Web.Services.Ollama
@@ -37,6 +39,26 @@
         <div class="pl-prompt-actions">
             <button class="btn btn-primary" @onclick="RunUpdatedPromptAsync" disabled="@isBusy">@(isBusy ? "Running..." : "Run Updated Prompt")</button>
         </div>
+    </section>
+
+    <section class="pl-run-status" aria-live="polite" aria-label="Run status">
+        <div class="pl-run-top">
+            <span class="pl-dot @(activeModelRequests > 0 ? "is-working" : "is-idle")" aria-hidden="true"></span>
+            <strong>@currentPhase</strong>
+            <span class="pl-run-summary">@GetRunSummary()</span>
+        </div>
+        <div class="pl-run-action">@currentAction</div>
+        @if (isBusy || planningTotal > 0 || executionTotal > 0)
+        {
+            <div class="pl-run-grid">
+                <span>Planning</span>
+                <span>@planningCompleted/@planningTotal complete</span>
+                <span>@planningFailed failed</span>
+                <span>Execution</span>
+                <span>@executionCompleted/@executionTotal complete</span>
+                <span>@executionFailed failed</span>
+            </div>
+        }
     </section>
 
     <section class="pl-terminal" aria-live="polite" aria-label="Live collaboration terminal">
@@ -75,6 +97,15 @@
     private bool isBusy;
     private bool shouldRunInitialPrompt;
     private bool hasStartedInitialRun;
+    private string currentPhase = "Idle";
+    private string currentAction = "Waiting to run.";
+    private int activeModelRequests;
+    private int planningTotal;
+    private int planningCompleted;
+    private int planningFailed;
+    private int executionTotal;
+    private int executionCompleted;
+    private int executionFailed;
 
     protected override async Task OnInitializedAsync()
     {
@@ -97,12 +128,23 @@
             collaborationPrompt = ProjectDraftStore.GetProjectPrompt(currentUserId, projectName) ?? string.Empty;
         }
 
+        if (string.IsNullOrWhiteSpace(collaborationPrompt))
+        {
+            collaborationPrompt = await TryLoadPromptFromProjectHistoryAsync(currentUserId) ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(collaborationPrompt))
+            {
+                ProjectDraftStore.SetProjectPrompt(currentUserId, projectName, collaborationPrompt);
+            }
+        }
+
         await LoadExistingActivityAsync(currentUserId);
         shouldRunInitialPrompt = !string.IsNullOrWhiteSpace(collaborationPrompt);
 
         if (!shouldRunInitialPrompt)
         {
-            errorMessage = "No project prompt was received for this run. Return to Projects and start again.";
+            errorMessage = activityLines.Count == 0
+                ? "No project prompt was received for this run. Return to Projects and start again."
+                : string.Empty;
         }
     }
 
@@ -144,6 +186,7 @@
 
     private async Task RunCollaborativeProjectAsync(string userId, string goal)
     {
+        errorMessage = string.Empty;
         var workers = await WorkerCatalogService.GetEnabledWorkersAsync();
         if (workers.Count == 0)
         {
@@ -151,6 +194,14 @@
             return;
         }
 
+        planningTotal = workers.Count;
+        planningCompleted = 0;
+        planningFailed = 0;
+        executionTotal = 0;
+        executionCompleted = 0;
+        executionFailed = 0;
+        currentPhase = "Stage 1/4: Concurrent Planning";
+        currentAction = $"Dispatching prompt to {workers.Count} workers in parallel.";
         isBusy = true;
         activityLines.Add($"[{DateTime.Now:T}] Project kickoff started.");
         StateHasChanged();
@@ -192,15 +243,19 @@
                 errorMessage = string.IsNullOrWhiteSpace(firstFailure)
                     ? "All workers failed this run. Update the prompt or review worker availability."
                     : $"All workers failed this run. {firstFailure}";
+                currentPhase = "Stage 1/4: Failed";
+                currentAction = "No worker completed planning.";
                 return;
             }
 
             var coordinator = SelectCoordinator(workers, planningCompleted);
+            currentPhase = "Stage 2/4: Shared Plan";
+            currentAction = $"{coordinator.DisplayName} is generating the shared execution plan.";
             activityLines.Add($"[{DateTime.Now:T}] Stage 2/4: {coordinator.DisplayName} is building a shared execution plan.");
             StateHasChanged();
 
             var sharedPlanPrompt = BuildSharedExecutionPlanPrompt(projectName, goal, planningCompleted);
-            var sharedPlanResult = await ChatOrchestrationService.SendPromptAsync(userId, coordinator.Id, sharedPlanPrompt,
+            var sharedPlanResult = await SendPromptWithActivityAsync(userId, coordinator.Id, sharedPlanPrompt,
                 selectedConversationId: null);
 
             await ConversationService.RenameConversationAsync(userId, sharedPlanResult.ConversationId,
@@ -208,15 +263,18 @@
 
             activityLines.Add($"[{DateTime.Now:T}] Shared execution plan complete.");
             activityLines.Add($"[{DateTime.Now:T}] Stage 3/4: Sequential handoff execution started.");
+            currentPhase = "Stage 3/4: Sequential Handoff";
             StateHasChanged();
 
             var executionOrder = OrderWorkersForExecution(workers, planningCompleted);
             var executionTracks = new List<WorkerTrack>();
             var handoffTrail = string.Empty;
+            executionTotal = executionOrder.Count;
 
             for (var index = 0; index < executionOrder.Count; index++)
             {
                 var worker = executionOrder[index];
+                currentAction = $"Running sequential step {index + 1}/{executionOrder.Count} with {worker.DisplayName}.";
                 var executionPrompt = BuildSequentialExecutionPrompt(
                     projectName,
                     goal,
@@ -247,6 +305,8 @@
             }
 
             activityLines.Add($"[{DateTime.Now:T}] Stage 4/4: Final collective synthesis via {coordinator.DisplayName}.");
+            currentPhase = "Stage 4/4: Final Synthesis";
+            currentAction = $"{coordinator.DisplayName} is producing final synthesis.";
             StateHasChanged();
 
             var synthesisPrompt = BuildCollectiveSynthesisPrompt(
@@ -257,47 +317,87 @@
                 executionTracks,
                 handoffTrail);
 
-            var collectiveResult = await ChatOrchestrationService.SendPromptAsync(userId, coordinator.Id, synthesisPrompt,
+            var collectiveResult = await SendPromptWithActivityAsync(userId, coordinator.Id, synthesisPrompt,
 selectedConversationId: null);
 
             await ConversationService.RenameConversationAsync(userId, collectiveResult.ConversationId,
 ProjectNaming.BuildConversationTitle(projectName, "Collective"));
 
             activityLines.Add($"[{DateTime.Now:T}] Collective synthesis complete.");
+            currentPhase = "Completed";
+            currentAction = "Run finished successfully.";
         }
         catch (OllamaChatException ex)
         {
             errorMessage = ex.Message;
+            currentPhase = "Failed";
+            currentAction = "Run failed due to model/endpoint error.";
         }
         catch (InvalidOperationException ex)
         {
             errorMessage = ex.Message;
+            currentPhase = "Failed";
+            currentAction = "Run failed due to configuration or validation error.";
         }
         catch (Exception ex)
         {
             errorMessage = $"Failed to run collaboration: {ex.Message}";
+            currentPhase = "Failed";
+            currentAction = "Run failed with unexpected exception.";
         }
         finally
         {
             isBusy = false;
+            activeModelRequests = 0;
         }
     }
 
     private async Task<WorkerTrack> TryRunWorkerTrackAsync(string userId, WorkerDefinition worker, string prompt, string
 trackName)
     {
+        Interlocked.Increment(ref activeModelRequests);
+
         try
         {
-            var result = await ChatOrchestrationService.SendPromptAsync(userId, worker.Id, prompt, selectedConversationId:
+            var result = await SendPromptWithActivityAsync(userId, worker.Id, prompt, selectedConversationId:
 null);
             await ConversationService.RenameConversationAsync(userId, result.ConversationId,
 ProjectNaming.BuildConversationTitle(projectName, $"{worker.DisplayName} {trackName}"));
+
+            if (trackName.StartsWith("Plan", StringComparison.OrdinalIgnoreCase))
+            {
+                planningCompleted++;
+            }
+            else
+            {
+                executionCompleted++;
+            }
+
             return new WorkerTrack(worker.Id, worker.DisplayName, result.AssistantResponse, true, null);
         }
         catch (Exception ex)
         {
+            if (trackName.StartsWith("Plan", StringComparison.OrdinalIgnoreCase))
+            {
+                planningFailed++;
+            }
+            else
+            {
+                executionFailed++;
+            }
+
             return new WorkerTrack(worker.Id, worker.DisplayName, string.Empty, false, ex.Message);
         }
+        finally
+        {
+            Interlocked.Decrement(ref activeModelRequests);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private Task<ChatSendResult> SendPromptWithActivityAsync(string userId, int workerId, string prompt, int? selectedConversationId)
+    {
+        return ChatOrchestrationService.SendPromptAsync(userId, workerId, prompt, selectedConversationId);
     }
 
     private async Task LoadExistingActivityAsync(string userId)
@@ -346,6 +446,94 @@ ProjectNaming.BuildConversationTitle(projectName, $"{worker.DisplayName} {trackN
                         string.Equals(extracted, projectName, StringComparison.OrdinalIgnoreCase))
             .OrderBy(x => x.UpdatedAtUtc ?? x.CreatedAtUtc)
             .ToList();
+    }
+
+    private async Task<string?> TryLoadPromptFromProjectHistoryAsync(string userId)
+    {
+        var conversations = await LoadProjectConversationsAsync(userId);
+
+        foreach (var conversation in conversations.OrderByDescending(x => x.UpdatedAtUtc ?? x.CreatedAtUtc))
+        {
+            var messages = await ConversationService.GetConversationMessagesAsync(userId, conversation.Id);
+            if (messages is null)
+            {
+                continue;
+            }
+
+            foreach (var message in messages
+                         .Where(x => string.Equals(x.Role, "user", StringComparison.OrdinalIgnoreCase))
+                         .OrderByDescending(x => x.CreatedAtUtc))
+            {
+                if (TryExtractGoalFromStoredPrompt(message.Content, projectName, out var extractedGoal))
+                {
+                    return extractedGoal;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryExtractGoalFromStoredPrompt(string content, string expectedProjectName, out string goal)
+    {
+        goal = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return false;
+        }
+
+        const string projectPrefix = "Project:";
+        const string goalPrefix = "Goal:";
+
+        var normalized = content.Replace("\r\n", "\n");
+        var projectIndex = normalized.IndexOf(projectPrefix, StringComparison.OrdinalIgnoreCase);
+        var goalIndex = normalized.IndexOf(goalPrefix, StringComparison.OrdinalIgnoreCase);
+
+        if (projectIndex < 0 || goalIndex < 0 || goalIndex <= projectIndex)
+        {
+            return false;
+        }
+
+        var projectLineEnd = normalized.IndexOf('\n', projectIndex);
+        if (projectLineEnd < 0)
+        {
+            projectLineEnd = normalized.Length;
+        }
+
+        var projectName = normalized[(projectIndex + projectPrefix.Length)..projectLineEnd].Trim();
+        if (!string.Equals(projectName, expectedProjectName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var goalStart = goalIndex + goalPrefix.Length;
+        if (goalStart >= normalized.Length)
+        {
+            return false;
+        }
+
+        var markers = new[]
+        {
+            "\n\nYou are a specialist contributor",
+            "\n\nThe following contributors produced planning input",
+            "\n\nShared Execution Plan:",
+            "\n\nThe following contributors worked in parallel:",
+            "\n\nYou are a coordinated multi-model project team"
+        };
+
+        var goalEnd = normalized.Length;
+        foreach (var marker in markers)
+        {
+            var markerIndex = normalized.IndexOf(marker, goalStart, StringComparison.OrdinalIgnoreCase);
+            if (markerIndex > goalStart && markerIndex < goalEnd)
+            {
+                goalEnd = markerIndex;
+            }
+        }
+
+        goal = normalized[goalStart..goalEnd].Trim();
+        return !string.IsNullOrWhiteSpace(goal);
     }
 
     private static WorkerDefinition SelectCoordinator(IReadOnlyList<WorkerDefinition> availableWorkers,
@@ -432,6 +620,28 @@ planningTracks)
         }
 
         return value[..maxLength] + "\n[truncated]";
+    }
+
+    private string GetRunSummary()
+    {
+        if (isBusy)
+        {
+            return activeModelRequests > 0
+                ? $"{activeModelRequests} model request(s) in-flight"
+                : "Preparing next model step";
+        }
+
+        if (currentPhase.Equals("Completed", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Idle - last run completed";
+        }
+
+        if (currentPhase.Equals("Failed", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Idle - last run failed";
+        }
+
+        return "Idle";
     }
 
     private void OpenProjectChats()
