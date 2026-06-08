@@ -1,7 +1,69 @@
 ﻿@page "/"
 
+@using Microsoft.AspNetCore.Authorization
+
 <PageTitle>Home</PageTitle>
 
-<h1>Hello, world!</h1>
+<div class="home-page">
+	<section class="home-hero">
+		<div class="home-copy">
+			<p class="home-eyebrow">GWS Workforce</p>
+			<h1>Run coordinated work across your model team.</h1>
+			<p class="home-lede">
+				Create projects, launch live multi-model planning, capture knowledge, and keep every run visible in one place.
+			</p>
 
-Welcome to your new app.
+			<div class="home-actions">
+				<NavLink class="btn btn-primary btn-lg" href="projects">Start a Project</NavLink>
+				<NavLink class="btn btn-outline-primary btn-lg" href="workforce">Open Chat</NavLink>
+				<NavLink class="btn btn-outline-secondary btn-lg" href="knowledge">Open Memory</NavLink>
+			</div>
+		</div>
+
+		<div class="home-status-card">
+			<p class="home-status-label">What this app does</p>
+			<ul>
+				<li>Creates durable project runs from one prompt.</li>
+				<li>Coordinates planning, execution, and synthesis across models.</li>
+				<li>Keeps chats, memory, and project history user-scoped.</li>
+			</ul>
+		</div>
+	</section>
+
+	<section class="home-grid" aria-label="Quick actions and guidance">
+		<article class="home-card">
+			<span class="home-card-kicker">1</span>
+			<h2>Start a Project</h2>
+			<p>Use this when you want one prompt to fan out to the model team, then come back as a single coordinated plan.</p>
+			<NavLink class="home-card-link" href="projects">Go to Projects</NavLink>
+		</article>
+
+		<article class="home-card">
+			<span class="home-card-kicker">2</span>
+			<h2>Review Live Runs</h2>
+			<p>Watch model planning, handoff, and synthesis stages as they happen with live run status and progress indicators.</p>
+			<NavLink class="home-card-link" href="projects">Open Live Workspace</NavLink>
+		</article>
+
+		<article class="home-card">
+			<span class="home-card-kicker">3</span>
+			<h2>Capture Knowledge</h2>
+			<p>Store reusable rules, prompts, and operating guidance so future runs stay consistent and grounded.</p>
+			<NavLink class="home-card-link" href="knowledge">Open Memory Vault</NavLink>
+		</article>
+
+		<article class="home-card home-card-muted">
+			<span class="home-card-kicker">4</span>
+			<h2>Manage Your Account</h2>
+			<p>Sign in to keep projects, conversations, and memory scoped to your profile.</p>
+			<AuthorizeView>
+				<Authorized>
+					<NavLink class="home-card-link" href="Account/Manage">Account Settings</NavLink>
+				</Authorized>
+				<NotAuthorized>
+					<NavLink class="home-card-link" href="Account/Login">Log In</NavLink>
+				</NotAuthorized>
+			</AuthorizeView>
+		</article>
+	</section>
+</div>
