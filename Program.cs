@@ -1,15 +1,23 @@
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using GwsWorkforce.Web.Components;
 using GwsWorkforce.Web.Components.Account;
 using GwsWorkforce.Web.Data;
 using GwsWorkforce.Web.Application.Contracts;
+using GwsWorkforce.Web.Infrastructure.Services.Health;
 using GwsWorkforce.Web.Infrastructure.Services;
 using GwsWorkforce.Web.Services;
 using GwsWorkforce.Web.Services.Ollama;
 
 var builder = WebApplication.CreateBuilder(args);
+var ollamaBaseUrl = builder.Configuration["Ollama:BaseUrl"] ?? "http://localhost:11434";
+
+if (!Uri.TryCreate(ollamaBaseUrl, UriKind.Absolute, out var ollamaBaseUri))
+{
+    throw new InvalidOperationException("Ollama:BaseUrl must be a valid absolute URL.");
+}
 
 // Add services to the container.
 builder.Services.AddRazorComponents()
@@ -30,11 +38,19 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlite(connectionString));
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
+builder.Services.AddHttpClient("ollama-health", client =>
+{
+    client.BaseAddress = ollamaBaseUri;
+    client.Timeout = TimeSpan.FromSeconds(5);
+});
 builder.Services.AddHttpClient<OllamaChatService>(client =>
 {
-    client.BaseAddress = new Uri("http://localhost:11434");
+    client.BaseAddress = ollamaBaseUri;
     client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
 });
+builder.Services.AddHealthChecks()
+    .AddCheck<DatabaseHealthCheck>("database", tags: new[] { "ready" })
+    .AddCheck<OllamaHealthCheck>("ollama", tags: new[] { "ready", "live" });
 builder.Services.AddScoped<IWorkerCatalogService, WorkerCatalogService>();
 builder.Services.AddScoped<IConversationService, ConversationService>();
 builder.Services.AddScoped<IKnowledgeService, KnowledgeService>();
@@ -93,6 +109,14 @@ app.MapStaticAssets();
 // Compatibility redirects for removed starter-template pages.
 app.MapGet("/counter", () => Results.Redirect("/projects", permanent: false));
 app.MapGet("/weather", () => Results.Redirect("/projects", permanent: false));
+app.MapHealthChecks("/health", new HealthCheckOptions
+{
+    Predicate = _ => true
+});
+app.MapHealthChecks("/ready", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags.Contains("ready")
+});
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

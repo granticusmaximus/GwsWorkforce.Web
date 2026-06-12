@@ -16,6 +16,7 @@
 @inject IChatOrchestrationService ChatOrchestrationService
 @inject ProjectDraftStore ProjectDraftStore
 @inject NavigationManager NavigationManager
+@inject IJSRuntime JS
 
 <PageTitle>Live Collaboration</PageTitle>
 
@@ -106,6 +107,8 @@
     private int executionTotal;
     private int executionCompleted;
     private int executionFailed;
+    private static readonly TimeSpan PlanningStageTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan ExecutionStepTimeout = TimeSpan.FromMinutes(2);
 
     protected override async Task OnInitializedAsync()
     {
@@ -150,6 +153,11 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (activityLines.Count > 0)
+        {
+            await JS.InvokeVoidAsync("scrollToBottom", ".pl-terminal");
+        }
+
         if (!firstRender || hasStartedInitialRun || !shouldRunInitialPrompt || currentUserId is null)
         {
             return;
@@ -213,29 +221,15 @@
             StateHasChanged();
 
             var planningPrompt = BuildConcurrentPlanningPrompt(projectName, goal);
-            var planningTasks = workers
-                .Select(worker => TryRunWorkerTrackAsync(userId, worker, planningPrompt, "Plan"))
-                .ToList();
+            var planningResult = await RunConcurrentStageAsync(
+                userId,
+                workers,
+                planningPrompt,
+                "Plan",
+                PlanningStageTimeout,
+                "Planning");
 
-            var planningCompleted = new List<WorkerTrack>();
-            while (planningTasks.Count > 0)
-            {
-                var completedTask = await Task.WhenAny(planningTasks);
-                planningTasks.Remove(completedTask);
-                var result = await completedTask;
-
-                if (result.IsSuccess)
-                {
-                    planningCompleted.Add(result);
-                    activityLines.Add($"[{DateTime.Now:T}] {result.WorkerName} submitted planning output.");
-                }
-                else
-                {
-                    activityLines.Add($"[{DateTime.Now:T}] {result.WorkerName} failed: {result.ErrorReason}");
-                }
-
-                StateHasChanged();
-            }
+            var planningCompleted = planningResult.Successes.ToList();
 
             if (planningCompleted.Count == 0)
             {
@@ -275,6 +269,7 @@
             {
                 var worker = executionOrder[index];
                 currentAction = $"Running sequential step {index + 1}/{executionOrder.Count} with {worker.DisplayName}.";
+                using var workerCts = new CancellationTokenSource(ExecutionStepTimeout);
                 var executionPrompt = BuildSequentialExecutionPrompt(
                     projectName,
                     goal,
@@ -284,11 +279,12 @@
                     index + 1,
                     executionOrder.Count);
 
-                var executionTrack = await TryRunWorkerTrackAsync(userId, worker, executionPrompt, $"Execute {index + 1}");
+                var executionTrack = await TryRunWorkerTrackAsync(userId, worker, executionPrompt, $"Execute {index + 1}", workerCts.Token);
 
                 if (executionTrack.IsSuccess)
                 {
                     executionTracks.Add(executionTrack);
+                    executionCompleted++;
                     activityLines.Add($"[{DateTime.Now:T}] {executionTrack.WorkerName} completed sequential step {index +
 1}/{executionOrder.Count}.");
 
@@ -297,6 +293,7 @@
                 }
                 else
                 {
+                    executionFailed++;
                     activityLines.Add($"[{DateTime.Now:T}] {executionTrack.WorkerName} sequential step failed: {executionTrack.ErrorReason}");
                     handoffTrail += $"\n\nStep {index + 1} - {executionTrack.WorkerName}: FAILED ({executionTrack.ErrorReason})";
                 }
@@ -352,40 +349,20 @@ ProjectNaming.BuildConversationTitle(projectName, "Collective"));
         }
     }
 
-    private async Task<WorkerTrack> TryRunWorkerTrackAsync(string userId, WorkerDefinition worker, string prompt, string
-trackName)
+    private async Task<WorkerTrack> TryRunWorkerTrackAsync(string userId, WorkerDefinition worker, string prompt, string trackName, CancellationToken cancellationToken = default)
     {
         Interlocked.Increment(ref activeModelRequests);
 
         try
         {
-            var result = await SendPromptWithActivityAsync(userId, worker.Id, prompt, selectedConversationId:
-null);
+            var result = await SendPromptWithActivityAsync(userId, worker.Id, prompt, selectedConversationId: null, cancellationToken);
             await ConversationService.RenameConversationAsync(userId, result.ConversationId,
 ProjectNaming.BuildConversationTitle(projectName, $"{worker.DisplayName} {trackName}"));
-
-            if (trackName.StartsWith("Plan", StringComparison.OrdinalIgnoreCase))
-            {
-                planningCompleted++;
-            }
-            else
-            {
-                executionCompleted++;
-            }
 
             return new WorkerTrack(worker.Id, worker.DisplayName, result.AssistantResponse, true, null);
         }
         catch (Exception ex)
         {
-            if (trackName.StartsWith("Plan", StringComparison.OrdinalIgnoreCase))
-            {
-                planningFailed++;
-            }
-            else
-            {
-                executionFailed++;
-            }
-
             return new WorkerTrack(worker.Id, worker.DisplayName, string.Empty, false, ex.Message);
         }
         finally
@@ -395,9 +372,116 @@ ProjectNaming.BuildConversationTitle(projectName, $"{worker.DisplayName} {trackN
         }
     }
 
-    private Task<ChatSendResult> SendPromptWithActivityAsync(string userId, int workerId, string prompt, int? selectedConversationId)
+    private Task<ChatSendResult> SendPromptWithActivityAsync(string userId, int workerId, string prompt, int? selectedConversationId, CancellationToken cancellationToken = default)
     {
-        return ChatOrchestrationService.SendPromptAsync(userId, workerId, prompt, selectedConversationId);
+        return ChatOrchestrationService.SendPromptAsync(userId, workerId, prompt, selectedConversationId, cancellationToken);
+    }
+
+    private async Task<ConcurrentStageResult> RunConcurrentStageAsync(
+        string userId,
+        IReadOnlyList<WorkerDefinition> workers,
+        string prompt,
+        string trackName,
+        TimeSpan stageTimeout,
+        string stageLabel)
+    {
+        using var stageCts = new CancellationTokenSource();
+        stageCts.CancelAfter(stageTimeout);
+
+        var stageStartedAt = DateTime.UtcNow;
+        var pendingTasks = workers
+            .Select(worker => new WorkerStageTask(
+                worker,
+                TryRunWorkerTrackAsync(userId, worker, prompt, trackName, stageCts.Token)))
+            .ToList();
+
+        var successes = new List<WorkerTrack>();
+        var failures = new List<string>();
+
+        while (pendingTasks.Count > 0)
+        {
+            var remaining = stageTimeout - (DateTime.UtcNow - stageStartedAt);
+            if (remaining <= TimeSpan.Zero)
+            {
+                break;
+            }
+
+            var timeoutTask = Task.Delay(remaining, stageCts.Token);
+            var completed = await Task.WhenAny(pendingTasks.Select(x => x.Task).Append(timeoutTask));
+
+            if (completed == timeoutTask)
+            {
+                break;
+            }
+
+            var finished = pendingTasks.First(x => x.Task == completed);
+            pendingTasks.Remove(finished);
+
+            var result = await finished.Task;
+            RecordStageResult(stageLabel, result, successes, failures);
+        }
+
+        if (pendingTasks.Count > 0)
+        {
+            stageCts.Cancel();
+            activityLines.Add($"[{DateTime.Now:T}] {stageLabel} stage timed out after {stageTimeout.TotalSeconds:F0}s. Continuing with completed results.");
+            StateHasChanged();
+
+            try
+            {
+                await Task.WhenAll(pendingTasks.Select(x => x.Task));
+            }
+            catch
+            {
+                // Individual worker results are captured below.
+            }
+
+            foreach (var pending in pendingTasks)
+            {
+                var result = await pending.Task;
+                RecordStageResult(stageLabel, result, successes, failures);
+            }
+        }
+
+        return new ConcurrentStageResult(successes, failures);
+    }
+
+    private void RecordStageResult(
+        string stageLabel,
+        WorkerTrack result,
+        List<WorkerTrack> successes,
+        List<string> failures)
+    {
+        if (result.IsSuccess)
+        {
+            successes.Add(result);
+            activityLines.Add($"[{DateTime.Now:T}] {result.WorkerName} submitted {stageLabel.ToLowerInvariant()} output.");
+
+            if (stageLabel.Equals("Planning", StringComparison.OrdinalIgnoreCase))
+            {
+                planningCompleted++;
+            }
+            else
+            {
+                executionCompleted++;
+            }
+        }
+        else
+        {
+            failures.Add($"{result.WorkerName} failed: {result.ErrorReason}");
+            activityLines.Add($"[{DateTime.Now:T}] {result.WorkerName} failed: {result.ErrorReason}");
+
+            if (stageLabel.Equals("Planning", StringComparison.OrdinalIgnoreCase))
+            {
+                planningFailed++;
+            }
+            else
+            {
+                executionFailed++;
+            }
+        }
+
+        StateHasChanged();
     }
 
     private async Task LoadExistingActivityAsync(string userId)
@@ -621,6 +705,10 @@ planningTracks)
 
         return value[..maxLength] + "\n[truncated]";
     }
+
+    private sealed record ConcurrentStageResult(IReadOnlyList<WorkerTrack> Successes, IReadOnlyList<string> Failures);
+
+    private sealed record WorkerStageTask(WorkerDefinition Worker, Task<WorkerTrack> Task);
 
     private string GetRunSummary()
     {

@@ -56,6 +56,52 @@ dotnet run --project GwsWorkforce.Web.csproj
 
 4. Open the app in the browser using the local URL shown in terminal output.
 
+## Docker
+
+Build the image:
+
+```bash
+docker build -t gws-workforce-web .
+```
+
+Run it with the default SQLite path persisted to a local volume and Ollama pointed at a reachable base URL:
+
+```bash
+docker run -d \
+  --name gws-workforce-web \
+  -p 8080:8080 \
+  -e ASPNETCORE_ENVIRONMENT=Production \
+  -e ASPNETCORE_URLS=http://+:8080 \
+  -e Ollama__BaseUrl=http://host.docker.internal:11434 \
+  -v gws-workforce-data:/app/Data \
+  gws-workforce-web
+```
+
+On Linux hosts, `host.docker.internal` requires Docker's host-gateway support. The included `compose.yaml` already configures that mapping.
+If Ollama is running on the same Linux host outside Docker, configure Ollama with `OLLAMA_HOST=0.0.0.0:11434` and keep port `11434` closed at the cloud firewall unless you explicitly need direct remote API access.
+
+## Docker Compose
+
+The repository now includes `compose.yaml` for a single-container web deployment:
+
+```bash
+docker compose up -d --build
+```
+
+Override the Ollama endpoint as needed:
+
+```bash
+export OLLAMA_BASE_URL=http://your-ollama-host:11434
+docker compose up -d --build
+```
+
+## Deployment Notes
+
+- The app now reads `Ollama:BaseUrl` from configuration, defaulting to `http://localhost:11434`.
+- If the web container and Ollama run on the same Linux host, keep Ollama private and point the app at the host or an internal network address.
+- If Ollama runs elsewhere, set `Ollama__BaseUrl` to that private or tunneled endpoint.
+- A DigitalOcean-focused deployment walkthrough is in `docs/DigitalOcean-Deployment.md`.
+
 ## Testing
 
 Run the automated tests with:

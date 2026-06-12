@@ -1,0 +1,24 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gws-workforce-web:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: DataSource=Data/app.db;Cache=Shared
+      Ollama__BaseUrl: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      Ollama__VerifierModel: ${OLLAMA_VERIFIER_MODEL:-deepseek-r1:14b}
+      Ollama__ChatTimeoutSeconds: ${OLLAMA_CHAT_TIMEOUT_SECONDS:-180}
+      Ollama__ChatTimeoutRetries: ${OLLAMA_CHAT_TIMEOUT_RETRIES:-1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - workforce-data:/app/Data
+
+volumes:
+  workforce-data:

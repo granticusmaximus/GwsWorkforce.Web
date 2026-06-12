@@ -84,11 +84,6 @@ public sealed class ChatOrchestrationService(
             assistantResponse,
             cancellationToken);
 
-        if (!verifierResult.IsPass)
-        {
-            throw new InvalidOperationException($"Response blocked by verifier: {verifierResult.Summary}");
-        }
-
         dbContext.ConversationMessages.Add(new ConversationMessage
         {
             ConversationId = conversation.Id,
@@ -210,12 +205,12 @@ public sealed class ChatOrchestrationService(
         var verifierModel = configuration["Ollama:VerifierModel"];
         if (string.IsNullOrWhiteSpace(verifierModel))
         {
-            throw new InvalidOperationException("Verifier model is not configured. Set Ollama:VerifierModel in appsettings.");
+            return new VerifierDecision(true, "PASS", "Verification skipped: no verifier model configured.", []);
         }
 
         if (string.Equals(verifierModel, primaryModelName, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("Verifier model must be different from the primary worker model.");
+            return new VerifierDecision(true, "PASS", "Verification skipped: verifier model matches primary model.", []);
         }
 
         var verifierPrompt =

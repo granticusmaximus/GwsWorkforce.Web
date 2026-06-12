@@ -10,6 +10,7 @@ public sealed class OllamaChatService(HttpClient httpClient, IConfiguration conf
     private static readonly TimeSpan MaxTimeout = TimeSpan.FromMinutes(10);
     private readonly TimeSpan requestTimeout = ResolveRequestTimeout(configuration);
     private readonly int timeoutRetries = ResolveTimeoutRetries(configuration);
+    private readonly string ollamaBaseUrl = ResolveBaseUrl(configuration, httpClient);
 
     public async Task<string> ChatAsync(
         string modelName,
@@ -70,7 +71,7 @@ public sealed class OllamaChatService(HttpClient httpClient, IConfiguration conf
             }
             catch (HttpRequestException)
             {
-                throw new OllamaChatException("Unable to reach Ollama at http://localhost:11434. Make sure Ollama is running locally.");
+                throw new OllamaChatException($"Unable to reach Ollama at {ollamaBaseUrl}. Make sure Ollama is running and reachable from the web app.");
             }
             catch (JsonException)
             {
@@ -102,6 +103,17 @@ public sealed class OllamaChatService(HttpClient httpClient, IConfiguration conf
         }
 
         return Math.Clamp(configuredRetries.Value, 0, 3);
+    }
+
+    private static string ResolveBaseUrl(IConfiguration configuration, HttpClient httpClient)
+    {
+        var configured = configuration["Ollama:BaseUrl"];
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return configured.TrimEnd('/');
+        }
+
+        return httpClient.BaseAddress?.ToString().TrimEnd('/') ?? "http://localhost:11434";
     }
 
     private static string CreateFailureMessage(System.Net.HttpStatusCode statusCode, string modelName, string body)

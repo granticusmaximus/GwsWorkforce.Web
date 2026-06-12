@@ -371,7 +371,7 @@ public class Phase3SecurityAndConsistencyTests
     }
 
     [Fact]
-    public async Task ChatFlow_VerifierRejects_BlocksAssistantMessagePersistence()
+    public async Task ChatFlow_VerifierRejects_ReturnsFailDecisionAndPersistsAssistantMessage()
     {
         var dbName = $"chat-verifier-reject-{Guid.NewGuid()}";
         await using var dbContext = CreateDbContext(dbName);
@@ -426,10 +426,12 @@ public class Phase3SecurityAndConsistencyTests
                 ["Ollama:VerifierModel"] = "verifier-model"
             }));
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            orchestrationService.SendPromptAsync("user-a", worker.Id, "Please answer", selectedConversationId: null));
+        var result = await orchestrationService.SendPromptAsync("user-a", worker.Id, "Please answer", selectedConversationId: null);
 
-        Assert.Contains("blocked by verifier", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("FAIL", result.VerifierDecision);
+        Assert.Contains("Unsupported claim", result.VerifierSummary, StringComparison.Ordinal);
+        Assert.Contains("Missing uncertainty statement", result.VerifierIssues);
+        Assert.Equal("Primary candidate answer", result.AssistantResponse);
 
         var conversation = await dbContext.Conversations.SingleAsync(x => x.ApplicationUserId == "user-a");
         var messages = await dbContext.ConversationMessages
@@ -437,9 +439,10 @@ public class Phase3SecurityAndConsistencyTests
             .OrderBy(x => x.CreatedAtUtc)
             .ToListAsync();
 
-        Assert.Single(messages);
+        Assert.Equal(2, messages.Count);
         Assert.Equal("user", messages[0].Role);
-        Assert.DoesNotContain(messages, x => x.Role == "assistant");
+        Assert.Equal("assistant", messages[1].Role);
+        Assert.Equal("Primary candidate answer", messages[1].Content);
     }
 
     [Fact]

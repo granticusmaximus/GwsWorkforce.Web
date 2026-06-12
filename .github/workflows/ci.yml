@@ -32,6 +32,9 @@ jobs:
       - name: Restore
         run: dotnet restore GwsWorkforce.Web.csproj
 
+      - name: Format verification
+        run: dotnet format --verify-no-changes --severity warn
+
       - name: Build (warnings as errors)
         run: dotnet build GwsWorkforce.Web.csproj -c Release --no-restore -warnaserror
 
@@ -46,6 +49,24 @@ jobs:
           else
             echo "No test projects found yet."
           fi
+
+      - name: Dependency vulnerability scan
+        run: |
+          scan_project() {
+            project_path="$1"
+            echo "Scanning $project_path for known vulnerabilities"
+
+            output=$(dotnet list "$project_path" package --vulnerable --include-transitive)
+            echo "$output"
+
+            if echo "$output" | grep -q "has the following vulnerable packages"; then
+              echo "Known vulnerable packages detected in $project_path"
+              exit 1
+            fi
+          }
+
+          scan_project GwsWorkforce.Web.csproj
+          scan_project tests/Application.Tests/Application.Tests.csproj
 
       - name: Install EF tool
         run: dotnet tool install --global dotnet-ef

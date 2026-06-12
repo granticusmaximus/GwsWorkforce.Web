@@ -38,6 +38,7 @@ public sealed class ProjectDraftStore
                 return null;
             }
 
+            drafts!.Remove(draftId);
             return draft.Prompt;
         }
     }

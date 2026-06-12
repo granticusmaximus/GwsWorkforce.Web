@@ -1,0 +1,16 @@
+.git
+.github
+.idea
+.vs
+.vscode
+bin
+obj
+tests/**/bin
+tests/**/obj
+TestResults
+Data/app.db
+*.user
+*.suo
+*.db
+*.sqlite
+*.sqlite3
